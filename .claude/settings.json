@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/spec-view-notify.sh\"",
+            "statusMessage": "設計ドキュメントの更新を確認中"
+          }
+        ]
+      }
+    ]
+  }
+}
