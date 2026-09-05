@@ -1,0 +1,470 @@
+<!--
+  spec-view テンプレート
+
+  使い方:
+  - 下の <title> 〜 </style> までを **1文字も変えずに** 出力の先頭にコピーする
+  - <title> の中身だけドキュメント名に差し替える
+  - その下のコンポーネント見本を組み合わせて本文を作る（見本のコメントは出力に含めない）
+
+  Artifact は <!doctype>/<html>/<head>/<body> を自動で付けるため、それらは書かない。
+-->
+
+<title>{{ドキュメント名}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    --ground: #F7F9F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDF2EF;
+    --ink: #1A1F1D;
+    --muted: #5F6B66;
+    --faint: #8A9691;
+    --line: #DCE4E0;
+    --line-soft: #E8EDEB;
+    --accent: #2F6F5E;
+    --confirmed: #2F6F5E;
+    --assumed: #B0601F;
+    --open: #3A5A9B;
+    --shadow: 0 1px 2px rgba(26,31,29,.05), 0 10px 28px -16px rgba(26,31,29,.28);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #111513;
+      --surface: #191F1C;
+      --surface-2: #212825;
+      --ink: #E7EDEA;
+      --muted: #98A49F;
+      --faint: #6E7B76;
+      --line: #2B3430;
+      --line-soft: #232A27;
+      --accent: #74C2A8;
+      --confirmed: #74C2A8;
+      --assumed: #DE9A5C;
+      --open: #85A2DC;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px -16px rgba(0,0,0,.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #111513;
+    --surface: #191F1C;
+    --surface-2: #212825;
+    --ink: #E7EDEA;
+    --muted: #98A49F;
+    --faint: #6E7B76;
+    --line: #2B3430;
+    --line-soft: #232A27;
+    --accent: #74C2A8;
+    --confirmed: #74C2A8;
+    --assumed: #DE9A5C;
+    --open: #85A2DC;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px -16px rgba(0,0,0,.7);
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.85;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 900px; margin: 0 auto; padding: 44px 26px 96px; }
+
+  code, pre, .mono { font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace; }
+
+  /* ---------- header ---------- */
+  .masthead { display: flex; flex-direction: column; gap: 14px; padding-bottom: 26px; border-bottom: 2px solid var(--ink); }
+  .eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .14em; color: var(--accent); text-transform: uppercase; }
+  h1 { font-size: 32px; font-weight: 700; line-height: 1.3; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+  .sub { font-size: 14px; color: var(--muted); max-width: 62ch; margin: 0; }
+  .srcline { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--faint); }
+  .srcline b { color: var(--muted); font-weight: 500; }
+
+  /* ---------- verdict tiles ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 30px 0 0; }
+  .tile { background: var(--surface); padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 3px; }
+  .tile .n { font-size: 36px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .tile .k { font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+  .tile .d { font-size: 11.5px; color: var(--faint); line-height: 1.6; }
+  .tile.ok   .n, .tile.ok   .k { color: var(--confirmed); }
+  .tile.warn .n, .tile.warn .k { color: var(--assumed); }
+  .tile.open .n, .tile.open .k { color: var(--open); }
+  .tile.zero .n, .tile.zero .k { color: var(--faint); }
+  @media (max-width: 620px) { .tiles { grid-template-columns: 1fr; } }
+
+  .verdict { margin: 18px 0 0; font-size: 13.5px; color: var(--muted); padding-left: 14px; border-left: 2px solid var(--accent); }
+  .verdict strong { color: var(--ink); font-weight: 700; }
+
+  /* ---------- alert cards ---------- */
+  .alerts { margin: 40px 0 0; display: flex; flex-direction: column; gap: 14px; }
+  .alerts-head { display: flex; align-items: baseline; gap: 10px; }
+  .alerts-head h2 { margin: 0; font-size: 19px; font-weight: 700; color: var(--assumed); }
+  .alerts-head span { font-size: 12px; color: var(--faint); }
+  .alert { background: var(--surface); border: 1px solid var(--assumed); border-radius: 4px; padding: 18px 20px 20px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
+  .alert.is-open { border-color: var(--open); }
+  .alert .no { font-size: 11.5px; font-weight: 700; letter-spacing: .1em; color: var(--assumed); }
+  .alert.is-open .no { color: var(--open); }
+  .alert h3 { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.55; }
+  .alert p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .alert .impact { font-size: 13px; padding: 10px 14px; background: var(--surface-2); border-radius: 3px; color: var(--ink); }
+  .alert .impact b { color: var(--assumed); font-weight: 700; }
+  .alert.is-open .impact b { color: var(--open); }
+
+  /* ---------- sections ---------- */
+  .sec { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 26px; margin-top: 42px; }
+  .rail { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding-top: 4px; }
+  .content { border-left: 2px solid var(--line-soft); padding-left: 22px; min-width: 0; }
+  .sec[data-origin="claude"] .content { border-left-color: var(--assumed); }
+  .sec[data-origin="open"] .content { border-left-color: var(--open); }
+  @media (max-width: 720px) {
+    .sec { grid-template-columns: 1fr; gap: 10px; }
+    .rail { flex-direction: row; align-items: center; }
+    .content { padding-left: 14px; }
+  }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: .07em; padding: 2px 7px; border: 1px solid; border-radius: 3px; white-space: nowrap; }
+  .b-ok   { color: var(--confirmed); border-color: var(--confirmed); }
+  .b-warn { color: var(--assumed);   border-color: var(--assumed); }
+  .b-open { color: var(--open);      border-color: var(--open); }
+  .origin { font-size: 11px; color: var(--faint); line-height: 1.5; }
+
+  h2 { font-size: 20px; font-weight: 700; margin: 0 0 12px; line-height: 1.45; text-wrap: balance; }
+  h3 { font-size: 14.5px; font-weight: 700; margin: 24px 0 8px; }
+  h3:first-child { margin-top: 0; }
+  p { margin: 0 0 12px; max-width: 64ch; }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: 15.5px; }
+  strong { font-weight: 700; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  ul.plain { margin: 0 0 12px; padding-left: 20px; }
+  ul.plain li { margin-bottom: 6px; max-width: 62ch; }
+
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 8px; }
+  ol.steps li { counter-increment: s; display: flex; gap: 12px; align-items: baseline; }
+  ol.steps li::before { content: counter(s); font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 500; color: var(--accent); border: 1px solid var(--line); border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+
+  /* ---------- flow ---------- */
+  .flow { list-style: none; margin: 4px 0 0; padding: 0; }
+  .flow .node { display: inline-flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 9px 15px; box-shadow: var(--shadow); }
+  .flow .node b { font-size: 14px; font-weight: 700; }
+  .flow .node span { font-size: 11.5px; color: var(--faint); }
+  .flow .edge { margin: 0 0 0 24px; padding: 9px 0 9px 18px; border-left: 2px solid var(--accent); font-size: 12px; color: var(--muted); }
+  .flow .edge code { font-size: 11.5px; }
+
+  /* ---------- code + table ---------- */
+  pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: 3px; padding: 15px 17px; overflow-x: auto; font-size: 12.5px; line-height: 1.75; margin: 0 0 14px; }
+  pre .fm { color: var(--faint); }
+  pre .key { color: var(--accent); font-weight: 500; }
+  code { background: var(--surface-2); border-radius: 2px; padding: 1px 5px; font-size: .89em; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .tw { overflow-x: auto; margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); font-weight: 700; padding: 0 14px 7px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.7; }
+  td:first-child { white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---------- task checklist ---------- */
+  .tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .tasks li { display: grid; grid-template-columns: 20px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); align-items: baseline; }
+  .tasks li:last-child { border-bottom: none; }
+  .tasks .box { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--faint); }
+  .tasks li.done .box { color: var(--confirmed); }
+  .tasks li.done > div { color: var(--muted); }
+  .tasks .meta { font-size: 11.5px; color: var(--faint); }
+
+  /* ---------- de-emphasized block ---------- */
+  .oos { margin-top: 42px; border: 1px dashed var(--line); border-radius: 4px; padding: 24px 26px; background: transparent; }
+  .oos h2 { color: var(--faint); font-size: 17px; }
+  .oos .content { border: none; padding: 0; }
+  .oos p, .oos li { color: var(--muted); }
+  .oos .keep { margin-top: 16px; padding: 12px 16px; border-left: 2px solid var(--line); background: var(--surface); font-size: 13px; }
+
+  /* ---------- decision（db capability が有効なときだけ現れる） ---------- */
+  .decide { margin-top: 4px; border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .decide-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--faint); }
+  .opts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .opt { font-family: inherit; font-size: 12.5px; font-weight: 500; padding: 5px 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--muted); cursor: pointer; }
+  .opt:hover { border-color: var(--muted); }
+  .opt[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 700; }
+  .opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .decide textarea { font-family: inherit; font-size: 13px; line-height: 1.7; padding: 9px 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--ground); color: var(--ink); resize: vertical; min-height: 62px; width: 100%; }
+  .decide textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .decide-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .save { font-family: inherit; font-size: 12.5px; font-weight: 700; padding: 6px 16px; border: 1px solid var(--accent); border-radius: 3px; background: var(--accent); color: var(--surface); cursor: pointer; }
+  .save:disabled { opacity: .4; cursor: default; }
+  .save:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .stamp { font-size: 11.5px; color: var(--faint); }
+  .alert.resolved { border-color: var(--confirmed); }
+  .alert.resolved .no { color: var(--confirmed); }
+  .alert.resolved .impact b { color: var(--confirmed); }
+
+  /* ---------- footer ---------- */
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 12px; color: var(--faint); display: flex; flex-direction: column; gap: 6px; }
+  footer b { color: var(--muted); font-weight: 500; }
+</style>
+
+<!-- ============================================================
+     ここから下はコンポーネント見本。出力にはこのコメントを含めない。
+     必要なものだけ選んで使い、中身は対象ドキュメントに置き換える。
+     ============================================================ -->
+
+<div class="page">
+
+  <!-- 【必須】masthead — ドキュメント名 / 一行要約 / 正本のパス・規模・読了目安 -->
+  <header class="masthead">
+    <div class="eyebrow">Steering / Product</div>
+    <h1>ドキュメント名</h1>
+    <p class="sub">このドキュメントが何を定めているかの一行要約。</p>
+    <div class="srcline">
+      <span>正本 <b class="mono">.kiro/steering/product.md</b></span>
+      <span>主張 21 件</span>
+      <span>読了目安 <b>3 分</b></span>
+    </div>
+  </header>
+
+  <!-- 【必須】tiles — 件数。0 件のタイルには zero を足して色を落とす -->
+  <div class="tiles">
+    <div class="tile ok">
+      <div class="n num">21</div>
+      <div class="k">確定済み</div>
+      <div class="d">根拠が示されている記述。読む必要はない</div>
+    </div>
+    <div class="tile warn zero">
+      <div class="n num">0</div>
+      <div class="k">要確認</div>
+      <div class="d">判断の根拠が弱い、または予測に依存している箇所</div>
+    </div>
+    <div class="tile open">
+      <div class="n num">3</div>
+      <div class="k">未決定</div>
+      <div class="d">明示的に「未定」とされている箇所</div>
+    </div>
+  </div>
+
+  <!-- 【必須】verdict — tiles の直後。何件読めば済むかを一文で -->
+  <p class="verdict">21 件のうち <strong>判断が要るのは 3 件だけ</strong>です。残りは根拠が示されています。</p>
+
+  <!-- 【0件なら丸ごと省略】alerts — 要確認カード。未決定は .alert.is-open を使う -->
+  <div class="alerts">
+    <div class="alerts-head">
+      <h2>要確認</h2>
+      <span>判断が必要 — 2 件</span>
+    </div>
+
+    <!-- data-decision の値がストアの文書 id の一部になる。カード番号と一致させる -->
+    <div class="alert" data-decision="01">
+      <div class="no">01 — 分類名（例: 将来の予測に依存）</div>
+      <h3>何が問題かを一文で言い切る見出し</h3>
+      <p>どういう記述で、なぜ判断が要るのかの説明。</p>
+      <div class="impact"><b>誤っていた場合:</b> 何が起きるか。これがないと読み手は判断できないので必須。</div>
+
+      <!-- 判断の記録欄。db が使えないビューでは hidden のまま出てこない。
+           全カードにこの塊をそのまま入れる（中身の書き換え不要） -->
+      <div class="decide" hidden>
+        <div class="decide-label">判断を記録</div>
+        <div class="opts">
+          <button type="button" class="opt" data-s="decided" aria-pressed="false">決めた</button>
+          <button type="button" class="opt" data-s="deferred" aria-pressed="false">保留</button>
+          <button type="button" class="opt" data-s="dismissed" aria-pressed="false">指摘は不要</button>
+        </div>
+        <textarea placeholder="判断の内容（例: Basic 認証で行く / ビルド時に埋め込む）"></textarea>
+        <div class="decide-foot">
+          <button type="button" class="save" disabled>保存</button>
+          <span class="stamp"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert is-open" data-decision="02">
+      <div class="no">02 — 未決定</div>
+      <h3>未決定事項の見出し</h3>
+      <p>説明。</p>
+      <div class="impact"><b>決めないと:</b> 何が進まないか。</div>
+      <div class="decide" hidden>
+        <div class="decide-label">判断を記録</div>
+        <div class="opts">
+          <button type="button" class="opt" data-s="decided" aria-pressed="false">決めた</button>
+          <button type="button" class="opt" data-s="deferred" aria-pressed="false">保留</button>
+          <button type="button" class="opt" data-s="dismissed" aria-pressed="false">指摘は不要</button>
+        </div>
+        <textarea placeholder="判断の内容"></textarea>
+        <div class="decide-foot">
+          <button type="button" class="save" disabled>保存</button>
+          <span class="stamp"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 本文セクション。data-origin に claude / open を入れると左レールが色付く -->
+  <section class="sec" data-origin="vault">
+    <div class="rail">
+      <span class="badge b-ok">確定</span>
+      <span class="origin">根拠の出所<br>（任意）</span>
+    </div>
+    <div class="content">
+      <h2>セクション見出し</h2>
+      <p>本文。<code>コード</code> や <strong>強調</strong> を使う。</p>
+
+      <ul class="plain">
+        <li>箇条書き</li>
+      </ul>
+
+      <ol class="steps">
+        <li>手順1</li>
+        <li>手順2</li>
+      </ol>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>列</th><th>列</th></tr></thead>
+          <tbody>
+            <tr><td><code>値</code></td><td>説明</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+<pre><span class="fm">---</span>
+<span class="key">key</span>: value
+<span class="fm">---</span></pre>
+
+      <!-- フロー図。node と edge を交互に並べる -->
+      <ol class="flow">
+        <li><span class="node"><b>ノード名</b><span>補足</span></span></li>
+        <li class="edge">辺のラベル</li>
+        <li><span class="node"><b>ノード名</b><span>補足</span></span></li>
+      </ol>
+
+      <!-- tasks.md 用のチェックリスト -->
+      <ul class="tasks">
+        <li class="done"><span class="box">[x]</span><div>完了したタスク <span class="meta">Requirements: 1.2</span></div></li>
+        <li><span class="box">[ ]</span><div>未着手のタスク <span class="meta">Requirements: 2.1</span></div></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- スコープ外・優先度の低い塊は .oos で視覚的に落とす -->
+  <section class="sec oos" data-origin="scope">
+    <div class="rail">
+      <span class="badge b-open">スコープ外</span>
+    </div>
+    <div class="content">
+      <h2>スコープ外の見出し</h2>
+      <p>本文。</p>
+      <div class="keep">補足の注記。</div>
+    </div>
+  </section>
+
+  <!-- 【必須】footer — 正本がどこかを必ず示す -->
+  <footer>
+    <div>正本は <b class="mono">.kiro/steering/product.md</b> — このページは生成物です。内容を直すときは md 側を編集してください。</div>
+  </footer>
+
+</div>
+
+<!--
+  判断の保存。要確認カードが 1 枚でもあるなら、この <script> を
+  **1文字も変えずに** 出力の末尾にコピーする。変えるのは DOCKEY の値だけ。
+
+  publish 時に capabilities: {db: {}} を渡すこと。渡し忘れると
+  claude.use("db") が null を返し、入力欄は出ないまま（ページは静的に読める）。
+-->
+<script>
+(function () {
+  var DOCKEY = "{{ドキュメントキー}}";   // 例: "tech" / "product" / "meal-record-design"
+  var LABEL = { decided: "決定", deferred: "保留", dismissed: "指摘不要" };
+
+  // ローカルファイルとして開かれた場合 window.claude は存在しない
+  var pending = (window.claude && typeof window.claude.use === "function")
+    ? window.claude.use("db")
+    : Promise.resolve(null);
+
+  pending.then(function (db) {
+    if (!db) return;   // 使えないビューでは静的表示のまま
+    Array.prototype.forEach.call(
+      document.querySelectorAll("[data-decision]"),
+      function (card) { wire(db, card); }
+    );
+  }).catch(function () { /* 静的表示のまま */ });
+
+  function wire(db, card) {
+    var no = card.getAttribute("data-decision");
+    var ref = db.doc("decisions/" + DOCKEY + "-" + no);
+    var box = card.querySelector(".decide");
+    var opts = card.querySelectorAll(".opt");
+    var ta = card.querySelector(".decide textarea");
+    var save = card.querySelector(".save");
+    var stamp = card.querySelector(".stamp");
+    var picked = null;
+
+    if (!box) return;
+    box.hidden = false;
+
+    Array.prototype.forEach.call(opts, function (b) {
+      b.addEventListener("click", function () {
+        picked = b.getAttribute("data-s");
+        Array.prototype.forEach.call(opts, function (x) {
+          x.setAttribute("aria-pressed", x === b ? "true" : "false");
+        });
+        save.disabled = false;
+      });
+    });
+
+    ta.addEventListener("input", function () { save.disabled = false; });
+
+    save.addEventListener("click", function () {
+      if (!picked) { stamp.textContent = "状態を選んでください"; return; }
+      save.disabled = true;
+      stamp.textContent = "保存中…";
+      var h3 = card.querySelector("h3");
+      ref.set({
+        doc: DOCKEY,
+        no: no,
+        title: h3 ? h3.textContent.trim() : "",
+        status: picked,
+        note: ta.value,
+        updatedAt: new Date().toISOString()
+      }).catch(function (e) {
+        save.disabled = false;
+        stamp.textContent = "保存できませんでした（" + ((e && e.code) || "unknown") + "）";
+      });
+    });
+
+    ref.onSnapshot(function (snap) {
+      if (!snap.exists) return;
+      var d = snap.data() || {};
+      picked = d.status || null;
+      Array.prototype.forEach.call(opts, function (x) {
+        x.setAttribute("aria-pressed", x.getAttribute("data-s") === picked ? "true" : "false");
+      });
+      // 入力中は上書きしない
+      if (document.activeElement !== ta) ta.value = d.note || "";
+      save.disabled = true;
+      card.classList.toggle("resolved", picked === "decided" || picked === "dismissed");
+      stamp.textContent = LABEL[picked] ? LABEL[picked] + " · " + fmt(d.updatedAt) : "";
+    }, function (e) {
+      stamp.textContent = "同期が切れました（" + e.code + "）";
+    });
+  }
+
+  function fmt(iso) {
+    var d = new Date(iso || "");
+    if (isNaN(d.getTime())) return "";
+    var p = function (n) { return n < 10 ? "0" + n : "" + n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
+      + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+})();
+</script>
