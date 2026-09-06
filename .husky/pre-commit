@@ -1,3 +1,7 @@
 # コミットに含めようとしているファイルのみを検査する。
 # 違反があれば非ゼロで終了し、コミットが中止される。
-pnpm biome check --staged
+#
+# --no-errors-on-unmatched は、検査対象が 0 件でもエラーにしない指定。
+# .kiro/ や public/ など検査の対象外にしたファイルだけを変更したコミットを
+# 妨げないために必要。これが無いと「違反は無いのにコミットできない」状態になる。
+pnpm biome check --staged --no-errors-on-unmatched
