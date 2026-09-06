@@ -42,3 +42,6 @@ next-env.d.ts
 
 # spec/steering の HTML ビュー（生成物）
 /.kiro/_view/
+
+# Playwright MCP の出力（スクリーンショット・スナップショット）
+/.playwright-mcp/
