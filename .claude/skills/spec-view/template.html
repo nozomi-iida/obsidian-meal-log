@@ -152,6 +152,20 @@
   ol.steps li { counter-increment: s; display: flex; gap: 12px; align-items: baseline; }
   ol.steps li::before { content: counter(s); font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 500; color: var(--accent); border: 1px solid var(--line); border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 
+  /* ---------- EARS の受入基準リスト（requirements 用） ----------
+     番号は position:absolute で置くこと。li を grid や flex にすると
+     ::before / <kbd> / 地のテキストが別々のアイテムに分かれ、
+     テキストが 24px 幅の列に落ちて 1 文字ずつ縦に折り返される。 */
+  ol.ears { margin: 0; padding: 0; list-style: none; counter-reset: e; display: flex; flex-direction: column; }
+  ol.ears li { counter-increment: e; position: relative; padding: 9px 0 9px 34px; border-bottom: 1px solid var(--line-soft); font-size: 13.5px; line-height: 1.75; }
+  ol.ears li:last-child { border-bottom: none; }
+  ol.ears li::before { content: counter(e); position: absolute; left: 0; top: 12px; font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--faint); }
+  ol.ears kbd { font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 500; color: var(--accent); background: none; }
+
+  /* 要件の Objective 行 */
+  .objective { font-size: 13.5px; color: var(--muted); background: var(--surface-2); border-radius: 3px; padding: 11px 14px; margin: 0 0 14px; }
+  .objective b { color: var(--ink); }
+
   /* ---------- flow ---------- */
   .flow { list-style: none; margin: 4px 0 0; padding: 0; }
   .flow .node { display: inline-flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 9px 15px; box-shadow: var(--shadow); }
@@ -352,6 +366,15 @@
         <li class="done"><span class="box">[x]</span><div>完了したタスク <span class="meta">Requirements: 1.2</span></div></li>
         <li><span class="box">[ ]</span><div>未着手のタスク <span class="meta">Requirements: 2.1</span></div></li>
       </ul>
+
+      <!-- requirements.md 用。Objective と EARS の受入基準 -->
+      <p class="objective"><b>開発者として</b>、〜したい。<b>なぜなら</b>〜のため。</p>
+      <ol class="ears">
+        <li><kbd>When</kbd> [event], the [system] shall [response]</li>
+        <li><kbd>If</kbd> [trigger], then the [system] shall [response]</li>
+        <li><kbd>While</kbd> [precondition], the [system] shall [response]</li>
+        <li><kbd>The</kbd> [system] shall [response]</li>
+      </ol>
     </div>
   </section>
 
