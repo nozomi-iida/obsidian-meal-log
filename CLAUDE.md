@@ -19,6 +19,7 @@ Kiro-style Spec-Driven Development on an agentic SDLC
 
 ## Development Guidelines
 - Think in English, generate responses in Japanese. All Markdown content written to project files (e.g., requirements.md, design.md, tasks.md, research.md, validation reports) MUST be written in the target language configured for this specification (see spec.json.language).
+- `.kiro/steering/` と `.kiro/specs/` の md は、必ず Write / Edit ツールで書く。Bash のリダイレクトやヒアドキュメント（`cat > file <<EOF`）で書くと PostToolUse hook をすり抜け、レビュービューの再生成が促されない。
 
 ## Minimal Workflow
 - Phase 0 (optional): `/kiro-steering`, `/kiro-steering-custom`
