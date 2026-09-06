@@ -49,7 +49,8 @@
 - **アクセス制御の適用範囲を変更したとき** — 除外パスを設けると、そこは無認証で到達可能になる
 - **`proxy` のランタイムが変わったとき** — `node:crypto` が使えなくなり、認証の実装方式が変わる
 - **manifest の配信経路を変更したとき** — 認証との関係が変わり、ホーム画面への追加可否に影響する
-- **環境変数の名称を変更したとき** — 配置環境の設定と齟齬が生じ、起動しなくなる
+- **環境変数の名称を変更したとき** — 配置環境の設定と齟齬が生じ、認証が有効にならない
+- **公開環境の判定方法を変更したとき** — 判定が誤ると、設定漏れの検知が働かず無防備なまま公開されうる
 
 ## Architecture
 
@@ -168,8 +169,10 @@ sequenceDiagram
 | 2.4 | 監視モード | テスト設定 | `pnpm test:watch` | — |
 | 2.5 | 0 件でも異常終了しない | テスト設定 | `--passWithNoTests` | — |
 | 3.1, 3.2, 3.3 | 認証の要求と通過 | 遮断点 / 認証判定 | `proxy` / `verifyCredentials` | 認証フロー |
-| 3.4 | 全経路が対象 | 遮断点 | `config.matcher` | 認証フロー |
+| 3.4 | 認証が有効なとき全経路が対象 | 遮断点 | `config.matcher` | 認証フロー |
 | 3.5 | 認証情報を含めない | 遮断点 | 環境変数 | — |
+| 3.6 | 手元で未設定なら素通り | 遮断点 | `loadCredentials` が `null` | 認証フロー |
+| 3.7 | 公開環境で未設定なら通さない | 遮断点 | 500 応答 | 認証フロー |
 | 4.1, 4.2, 4.3 | 追加情報の提供と全画面起動 | アプリマニフェスト | `MetadataRoute.Manifest` | — |
 
 ## Components and Interfaces
@@ -213,8 +216,8 @@ export type Credentials = {
   readonly password: string;
 };
 
-/** 環境変数から認証情報を読み出す。未設定なら例外を投げる。 */
-export function loadCredentials(env: NodeJS.ProcessEnv): Credentials;
+/** 環境変数から認証情報を読み出す。両方が揃っていなければ null。 */
+export function loadCredentials(env: NodeJS.ProcessEnv): Credentials | null;
 
 /**
  * Authorization ヘッダの値を検証する。
@@ -226,14 +229,14 @@ export function verifyCredentials(
 ): boolean;
 ```
 
-- **Preconditions**: `expected` は `loadCredentials` が返した値であること
-- **Postconditions**: `header` が `Basic ` で始まらない、復号できない、`user:password` の形をしていない、値が一致しない場合はいずれも `false` を返す
-- **Invariants**: 例外を投げない（`loadCredentials` を除く）。判定に要する時間は入力の内容に依存しない
+- **Preconditions**: `expected` は `loadCredentials` が `null` 以外を返した値であること
+- **Postconditions**: `header` が `Basic ` で始まらない、復号できない、`user:password` の形をしていない、値が一致しない場合はいずれも `false` を返す。`loadCredentials` は 2 つの変数が揃っている場合のみ値を返し、片方でも欠ければ `null` を返す
+- **Invariants**: **どちらの関数も例外を投げない。** 判定に要する時間は入力の内容に依存しない
 
 **Implementation Notes**
 
-- Integration: `loadCredentials` は起動時に一度だけ呼ぶ。要求ごとに読み直さない
-- Validation: 未設定時の例外メッセージには不足している変数名を含める。値は含めない
+- Integration: 認証情報は要求ごとに読み出す。認証の有効・無効が設定の有無で決まるため、起動時に固定すると設定を変えた際に再起動が要る
+- Validation: 片方だけ設定されている状態は「未設定」として扱う。中途半端な設定で認証が有効になることを避ける
 - Risks: base64 の復号に失敗する入力（不正なバイト列）を受け取りうる。例外にせず `false` を返す
 
 ### ランタイム層
@@ -270,14 +273,22 @@ export function proxy(request: NextRequest): Response | undefined;
 export const config: { matcher: readonly string[] };
 ```
 
-- **Preconditions**: `BASIC_AUTH_USER` と `BASIC_AUTH_PASSWORD` が設定されていること
-- **Postconditions**: 検証を通れば `undefined` を返して処理を継続させる。通らなければ 401 と `WWW-Authenticate` ヘッダを持つ応答を返す
-- **Invariants**: 認証を通らない要求がアプリに到達しない
+- **Preconditions**: なし。認証情報の有無に応じて挙動を変える
+- **Postconditions**: 次の 4 通りに分岐する。
+
+  | 認証情報 | 環境 | 応答 |
+  |---|---|---|
+  | 未設定 | 手元 | `undefined` を返して素通りさせる |
+  | 未設定 | 公開 | **500 を返す**。設定の不足を示し、要求を通さない |
+  | 設定あり | 問わず | 検証する。通れば `undefined`、通らなければ 401 と `WWW-Authenticate` |
+
+- **Invariants**: 公開する環境において、認証情報が設定されていない状態で要求がアプリに到達しない
 
 **Implementation Notes**
 
 - Integration: `matcher` は全経路を対象にする。`_next/static` を除外しない。利用者が 1 名であり、性能上の懸念がないため
-- Validation: 環境変数が未設定なら、モジュールの読み込み時点で例外を投げる。要求を通してしまう経路を作らない。設定漏れがビルド時に判明するため、配置前に気付ける
+- **環境の判定**: `NODE_ENV` が `production` である場合を公開する環境とみなす。この判定は**認証情報が無いときの振る舞いを決めるためだけ**に使う。認証の有効・無効そのものは認証情報の有無で決まるため、手元でも設定すれば認証を試せる
+- Validation: 判定は要求時に行う。ビルド時に環境変数を要求しないため、変数の無い環境でもビルドは通る
 - Risks: 除外を設けないため、静的アセットの取得も認証を通る必要がある。同一オリジンであればブラウザが認証情報を送るため通る見込みだが、**manifest だけはブラウザが独自の経路で取得する**ため保証がない
 - **実装の最初に確認する**: (1) 認証後にページの CSS と JavaScript が読み込まれる (2) 生成 HTML の `<link rel="manifest">` に `crossorigin="use-credentials"` が付与されている (3) 開発者ツールで manifest が 200 で取得できる
 - **退避策**: (3) が 401 になる場合、`matcher` から manifest とアイコンのパスのみを除外する。いずれも中身のないメタデータであり、公開されても実害はない。ただし除外の追加は Revalidation Triggers に該当するため、実施時は本節と Security Considerations を更新する
@@ -343,7 +354,8 @@ export default function manifest(): MetadataRoute.Manifest;
 2. `verifyCredentials` に `null` を渡すと `false` を返す（3.1）
 3. `verifyCredentials` に誤ったパスワードを渡すと `false` を返す（3.3）
 4. `verifyCredentials` に `Basic ` で始まらない値、および復号できない値を渡すと、例外を投げずに `false` を返す（3.3）
-5. `loadCredentials` は変数が未設定のとき、不足している変数名を含む例外を投げる（3.5）
+5. `loadCredentials` は 2 つの変数が揃っているとき、その値を持つ認証情報を返す（3.1, 3.2）
+6. `loadCredentials` は両方が欠けているとき、および片方のみ設定されているとき、いずれも `null` を返す（3.6）
 
 ### 遮断点の自動テストは行わない
 
@@ -357,18 +369,21 @@ export default function manifest(): MetadataRoute.Manifest;
 
 実装完了時に、以下をブラウザで確認する。
 
-6. 認証情報を持たない状態でアプリを開くと、認証ダイアログが表示される（3.1）
-7. 誤った認証情報を入力すると、再度ダイアログが表示される（3.3）
-8. 正しい認証情報を入力すると、ページが表示される（3.2）
-9. 認証を通過したあと、ページの CSS と JavaScript が読み込まれる（3.4）
-10. 生成された HTML の `<link rel="manifest">` に `crossorigin="use-credentials"` が付与されている（4.1）
-11. 開発者ツールで manifest が 200 で取得でき、インストール可能と判定される（4.1, 4.3）
-12. 違反のあるコードに対し検査コマンドが非ゼロで終了する（1.3）
-13. 失敗するテストに対しテストコマンドが非ゼロで終了する（2.3）
+7. 認証情報を設定しない状態でアプリを開くと、認証を求められずページが表示される（3.6）
+8. 認証情報を設定して起動し直すと、認証ダイアログが表示される（3.1）
+9. 誤った認証情報を入力すると、再度ダイアログが表示される（3.3）
+10. 正しい認証情報を入力すると、ページが表示される（3.2）
+11. 認証を通過したあと、ページの CSS と JavaScript が読み込まれる（3.4）
+12. 生成された HTML の `<link rel="manifest">` に `crossorigin="use-credentials"` が付与されている（4.1）
+13. 開発者ツールで manifest が 200 で取得でき、インストール可能と判定される（4.1, 4.3）
+14. `NODE_ENV` を production にし、認証情報を設定せずに起動すると 500 が返る（3.7）
+15. 違反のあるコードに対し検査コマンドが非ゼロで終了する（1.3）
+16. 失敗するテストに対しテストコマンドが非ゼロで終了する（2.3）
 
-項目 6〜8 が遮断の配線を担保する。項目 9 と 11 は、`matcher` に除外を設けない判断が
-成立するかを確かめるためのもので、失敗した場合は遮断点の Implementation Notes に記した
-退避策を適用する。
+項目 7〜10 が遮断の配線と、設定の有無による切り替えを担保する。項目 11 と 13 は、
+`matcher` に除外を設けない判断が成立するかを確かめるためのもので、失敗した場合は
+遮断点の Implementation Notes に記した退避策を適用する。項目 14 は設定漏れのまま
+公開される事故を防げているかの確認で、`NODE_ENV` を変えて起動するだけで確かめられる。
 
 ホーム画面への追加と全画面起動の実機確認は、requirements の Boundary Context に従い利用者が別途行う。
 
@@ -378,4 +393,5 @@ export default function manifest(): MetadataRoute.Manifest;
 - **比較方法**: `timingSafeEqual` により定数時間で比較する。長さが異なる入力でも比較時間が変わらないよう、比較前に固定長へ変換する
 - **失敗応答の均質化**: 認証失敗の理由を応答から区別できないようにする
 - **適用漏れの防止**: `matcher` に除外を設けない。除外を追加する変更は Revalidation Triggers に該当し、影響の再確認を要する
+- **設定漏れの防止**: 手元では認証情報が無くても素通りさせるが、**公開する環境では要求を通さず 500 を返す**。開発の快適さと引き換えに無防備な公開が起きないようにする。認証の有効・無効を `NODE_ENV` で直接分岐させず、認証情報の有無で決めるのは、手元でも認証の挙動を確かめられるようにするため
 - **後続 spec への申し送り**: 遮断点は**多層防御の 1 層目であり、唯一の防壁ではない**。Server Function は独立したルートではなく、それが使われているルートへの POST として扱われる。したがって `matcher` の変更や、Server Function を別ルートへ移すリファクタによって、**保護が静かに外れうる**。`meal-record` が Server Function で GitHub にコミットする設計を取る場合、その関数の内部でも認証を検証すること。遮断点だけに依存しない
