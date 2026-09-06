@@ -217,7 +217,9 @@ export type Credentials = {
 };
 
 /** 環境変数から認証情報を読み出す。両方が揃っていなければ null。 */
-export function loadCredentials(env: NodeJS.ProcessEnv): Credentials | null;
+export function loadCredentials(
+  env: Record<string, string | undefined>,
+): Credentials | null;
 
 /**
  * Authorization ヘッダの値を検証する。
@@ -236,6 +238,7 @@ export function verifyCredentials(
 **Implementation Notes**
 
 - Integration: 認証情報は要求ごとに読み出す。認証の有効・無効が設定の有無で決まるため、起動時に固定すると設定を変えた際に再起動が要る
+- **引数の型**: `NodeJS.ProcessEnv` ではなく `Record<string, string | undefined>` を受ける。`process.env` はこの型に代入できるため呼び出し側は変わらない。フレームワークが `NodeJS.ProcessEnv` を拡張して特定のキーを必須にしている場合、テストから部分的なオブジェクトを渡せなくなるため。HTTP の型に依存しないという方針と同じ理由で、実行環境固有の型にも依存させない
 - Validation: 片方だけ設定されている状態は「未設定」として扱う。中途半端な設定で認証が有効になることを避ける
 - Risks: base64 の復号に失敗する入力（不正なバイト列）を受け取りうる。例外にせず `false` を返す
 
