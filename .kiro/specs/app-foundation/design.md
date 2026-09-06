@@ -154,9 +154,9 @@ sequenceDiagram
 
 **Key Decisions**:
 
-- 判定は `proxy` に入った全要求に対して行う。除外パスを設けない
+- 判定は `proxy` に入った全要求に対して行う。除外するのは manifest とアイコンの 2 つのみ
 - 失敗時は 401 と `WWW-Authenticate: Basic realm="..."` を返す。リダイレクトはしない。ブラウザに認証ダイアログを出させるため
-- manifest とアイコンも遮断の対象に含む。ブラウザは manifest 取得時に認証情報を送らないが、Next.js が `<link>` に `crossorigin="use-credentials"` を付与するため送られる想定（検証項目）
+- **manifest とアイコンは遮断の対象から外す。** `<link rel="manifest">` は `crossorigin` 属性が無いと、同一オリジンであっても認証情報を伴わずに取得される。タスク 2.2 で生成 HTML を確認したところ、Next.js はこの属性を付与しなかった（出力は `<link rel="manifest" href="/manifest.webmanifest"/>` のみ）。遮断したままではホーム画面に追加できない
 
 ## Requirements Traceability
 
@@ -169,7 +169,7 @@ sequenceDiagram
 | 2.4 | 監視モード | テスト設定 | `pnpm test:watch` | — |
 | 2.5 | 0 件でも異常終了しない | テスト設定 | `--passWithNoTests` | — |
 | 3.1, 3.2, 3.3 | 認証の要求と通過 | 遮断点 / 認証判定 | `proxy` / `verifyCredentials` | 認証フロー |
-| 3.4 | 認証が有効なとき全経路が対象 | 遮断点 | `config.matcher` | 認証フロー |
+| 3.4 | 認証が有効なとき全経路が対象 | 遮断点 | `config.matcher`（manifest とアイコンのみ除外。遮断点の Implementation Notes を参照） | 認証フロー |
 | 3.5 | 認証情報を含めない | 遮断点 | 環境変数 | — |
 | 3.6 | 手元で未設定なら素通り | 遮断点 | `loadCredentials` が `null` | 認証フロー |
 | 3.7 | 公開環境で未設定なら通さない | 遮断点 | 500 応答 | 認証フロー |
@@ -255,7 +255,7 @@ export function verifyCredentials(
 
 - Next.js の `proxy` 規約に従う。ファイル名は `proxy.ts`、エクスポートする関数名は `proxy`
 - 判定そのものは行わず、認証判定に委譲する
-- 除外パスを設けない。静的アセットと manifest も対象に含む
+- 除外するのは manifest とアイコンの 2 つのみ。静的アセットは対象に含む
 
 **Dependencies**
 
@@ -272,7 +272,7 @@ import type { NextRequest } from "next/server";
 /** Next.js 16 の proxy 規約。ランタイムは nodejs 固定。 */
 export function proxy(request: NextRequest): Response | undefined;
 
-/** 適用範囲。除外を設けず全経路を対象にする。 */
+/** 適用範囲。manifest とアイコンを除く全経路を対象にする。 */
 export const config: { matcher: readonly string[] };
 ```
 
@@ -289,12 +289,13 @@ export const config: { matcher: readonly string[] };
 
 **Implementation Notes**
 
-- Integration: `matcher` は全経路を対象にする。`_next/static` を除外しない。利用者が 1 名であり、性能上の懸念がないため
+- Integration: `matcher` は `_next/static` を除外しない。利用者が 1 名であり、性能上の懸念がないため。除外するのは manifest とアイコンの 2 つだけで、これは性能ではなくブラウザの取得方式に由来する
 - **環境の判定**: `NODE_ENV` が `production` である場合を公開する環境とみなす。この判定は**認証情報が無いときの振る舞いを決めるためだけ**に使う。認証の有効・無効そのものは認証情報の有無で決まるため、手元でも設定すれば認証を試せる
 - Validation: 判定は要求時に行う。ビルド時に環境変数を要求しないため、変数の無い環境でもビルドは通る
-- Risks: 除外を設けないため、静的アセットの取得も認証を通る必要がある。同一オリジンであればブラウザが認証情報を送るため通る見込みだが、**manifest だけはブラウザが独自の経路で取得する**ため保証がない
-- **実装の最初に確認する**: (1) 認証後にページの CSS と JavaScript が読み込まれる (2) 生成 HTML の `<link rel="manifest">` に `crossorigin="use-credentials"` が付与されている (3) 開発者ツールで manifest が 200 で取得できる
-- **退避策**: (3) が 401 になる場合、`matcher` から manifest とアイコンのパスのみを除外する。いずれも中身のないメタデータであり、公開されても実害はない。ただし除外の追加は Revalidation Triggers に該当するため、実施時は本節と Security Considerations を更新する
+- Risks: 静的アセットの取得も認証を通る必要がある。同一オリジンであればブラウザが認証情報を送るため通る見込み
+- **manifest とアイコンの除外**: `/manifest.webmanifest` と `/favicon.ico` の 2 つを `matcher` から外す。ブラウザが manifest の取得に認証情報を送らないため、遮断したままではホーム画面に追加できない。いずれも中身のないメタデータであり、公開されても実害はない
+- **受入基準 3.4 との関係**: 3.4 は「すべての画面と、外部から到達できるすべての経路を認証の対象とする」と定めている。上記の除外は**この基準からの逸脱**にあたる。画面ではなくメタデータに限った逸脱であり、vault への書き込み経路とは関係しないため許容する。**これ以上の除外は認めない**
+- **実装の最初に確認する**: (1) 認証後にページの CSS と JavaScript が読み込まれる (2) 認証が有効な状態で manifest が 200 で取得でき、インストール可能と判定される
 
 ### メタデータ層
 
@@ -319,7 +320,7 @@ export default function manifest(): MetadataRoute.Manifest;
 
 - Integration: `src/app/manifest.ts` に置く。Next.js が `<link rel="manifest">` を自動で出力する
 - **アイコン**: 既存の `src/app/favicon.ico` を `sizes: "any"` で参照する（Next.js 公式のサンプルと同じ形）。本 spec ではアイコンのファイルを新規に追加しない。意匠を持つアイコンは配置前に別タスクで用意し、その時点で本ファイルの `icons` を差し替える
-- Validation: 生成された HTML に `crossorigin="use-credentials"` が含まれることを確認する。含まれない場合は `layout.tsx` で手動の `<link>` を出力する
+- Validation: 生成された HTML に `<link rel="manifest">` が出力されることを確認する。`crossorigin="use-credentials"` は付与されないため、到達可能性は遮断点側の除外で担保する
 - Risks: `favicon.ico` はホーム画面のアイコンとしては粗い。配置前の差し替えを前提とする
 
 ### 開発ツール
@@ -378,16 +379,16 @@ export default function manifest(): MetadataRoute.Manifest;
 9. 誤った認証情報を入力すると、再度ダイアログが表示される（3.3）
 10. 正しい認証情報を入力すると、ページが表示される（3.2）
 11. 認証を通過したあと、ページの CSS と JavaScript が読み込まれる（3.4）
-12. 生成された HTML の `<link rel="manifest">` に `crossorigin="use-credentials"` が付与されている（4.1）
-13. 開発者ツールで manifest が 200 で取得でき、インストール可能と判定される（4.1, 4.3）
+12. 生成された HTML に `<link rel="manifest">` が出力されている（4.1）
+13. 認証が有効な状態で、開発者ツールから manifest が 200 で取得でき、インストール可能と判定される（4.1, 4.3）
 14. `NODE_ENV` を production にし、認証情報を設定せずに起動すると 500 が返る（3.7）
 15. 違反のあるコードに対し検査コマンドが非ゼロで終了する（1.3）
 16. 失敗するテストに対しテストコマンドが非ゼロで終了する（2.3）
 
-項目 7〜10 が遮断の配線と、設定の有無による切り替えを担保する。項目 11 と 13 は、
-`matcher` に除外を設けない判断が成立するかを確かめるためのもので、失敗した場合は
-遮断点の Implementation Notes に記した退避策を適用する。項目 14 は設定漏れのまま
-公開される事故を防げているかの確認で、`NODE_ENV` を変えて起動するだけで確かめられる。
+項目 7〜10 が遮断の配線と、設定の有無による切り替えを担保する。項目 11 は静的アセットが
+認証を通れるかの確認、項目 13 は manifest とアイコンの除外が正しく効いているかの確認である。
+項目 14 は設定漏れのまま公開される事故を防げているかの確認で、`NODE_ENV` を変えて
+起動するだけで確かめられる。
 
 ホーム画面への追加と全画面起動の実機確認は、requirements の Boundary Context に従い利用者が別途行う。
 
@@ -396,6 +397,6 @@ export default function manifest(): MetadataRoute.Manifest;
 - **認証情報の保管**: `.env.local` に置く。`.gitignore` の `.env*` により追跡されない。`.env.local.example` には変数名と用途のみを記し、値は含めない
 - **比較方法**: `timingSafeEqual` により定数時間で比較する。長さが異なる入力でも比較時間が変わらないよう、比較前に固定長へ変換する
 - **失敗応答の均質化**: 認証失敗の理由を応答から区別できないようにする
-- **適用漏れの防止**: `matcher` に除外を設けない。除外を追加する変更は Revalidation Triggers に該当し、影響の再確認を要する
+- **適用漏れの防止**: `matcher` の除外は `/manifest.webmanifest` と `/favicon.ico` の 2 つに限る。どちらも中身のないメタデータで、vault への書き込み経路とは関係しない。**これ以上の除外を追加する変更は Revalidation Triggers に該当し**、影響の再確認を要する。受入基準 3.4 からの逸脱であることは遮断点の Implementation Notes に記した
 - **設定漏れの防止**: 手元では認証情報が無くても素通りさせるが、**公開する環境では要求を通さず 500 を返す**。開発の快適さと引き換えに無防備な公開が起きないようにする。認証の有効・無効を `NODE_ENV` で直接分岐させず、認証情報の有無で決めるのは、手元でも認証の挙動を確かめられるようにするため
 - **後続 spec への申し送り**: 遮断点は**多層防御の 1 層目であり、唯一の防壁ではない**。Server Function は独立したルートではなく、それが使われているルートへの POST として扱われる。したがって `matcher` の変更や、Server Function を別ルートへ移すリファクタによって、**保護が静かに外れうる**。`meal-record` が Server Function で GitHub にコミットする設計を取る場合、その関数の内部でも認証を検証すること。遮断点だけに依存しない
