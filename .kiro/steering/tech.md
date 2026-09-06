@@ -30,6 +30,10 @@ Next.js App Router によるフルスタック構成。サーバーコンポー�
 
 Biome を使う。ESLint / Prettier は使わない。
 
+Next.js 16 で `next lint` は削除され、`next build` も Lint を実行しない。
+公式ドキュメントが Biome または ESLint を直接使うよう案内している。
+品質チェックは独立したコマンドとして持つ。
+
 ### テスト
 
 Vitest を使う。cc-sdd の `/kiro-impl` は TDD（RED → GREEN）で実装するため、
@@ -95,9 +99,14 @@ GitHub を経由するのはこの制約が理由。
 GitHub のアクセストークンはサーバー側の環境変数に置き、クライアントに渡さない。
 コミット処理は Route Handler またはサーバーアクション経由で行う。
 
-### 認証 — middleware による Basic 認証
+### 認証 — proxy による Basic 認証
 
-Next.js の middleware で Basic 認証をかける。パスワードは環境変数に置く。
+Next.js の `proxy` で Basic 認証をかける。パスワードは環境変数に置く。
+
+Next.js 16 で `middleware` は `proxy` に改名された。ファイル名は `proxy.ts`、
+エクスポートする関数名は `proxy`。**`proxy` のランタイムは nodejs 固定**で、
+edge は選べない。これは制約ではなく利点で、認証情報の定数時間比較に
+`node:crypto` の `timingSafeEqual` がそのまま使える。
 
 Vercel の Deployment Protection は使わない。Hobby プランで使える Vercel Authentication は
 Preview と生成 URL しか保護せず、**本番ドメインは公開のまま**になるため。
@@ -129,7 +138,7 @@ Basic 認証下で 401 になる。`<link rel="manifest" crossorigin="use-creden
 |---|---|
 | Biome | Lint / フォーマット |
 | Vitest | テスト |
-| middleware（Basic 認証） | 公開 URL の保護 |
+| proxy（Basic 認証） | 公開 URL の保護 |
 | manifest とアイコン | ホーム画面からの起動 |
 
 ## 初期スコープ外
