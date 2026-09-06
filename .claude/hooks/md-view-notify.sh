@@ -23,6 +23,6 @@ esac
 jq -cn --arg k "$key" '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
-    additionalContext: ("設計ドキュメントを更新した。この編集で一区切りなら /spec-view \($k) を実行してビューを更新し、URL を提示すること。まだ編集を続ける途中なら実行しなくてよい。")
+    additionalContext: ("設計ドキュメントを更新した。この編集で一区切りなら md-view スキル（/md-view \($k)）を実行してビューを更新し、URL を提示すること。まだ編集を続ける途中なら実行しなくてよい。")
   }
 }'
