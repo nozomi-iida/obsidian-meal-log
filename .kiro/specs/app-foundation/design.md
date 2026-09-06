@@ -323,7 +323,7 @@ export default function manifest(): MetadataRoute.Manifest;
 
 検査・整形設定とテスト設定は新たな境界を導入しないため、詳細ブロックを設けない。
 
-- **検査・整形設定**: `biome.json` 1 ファイル。対象は `node_modules` と `.next` を除くプロジェクト全体。`package.json` に `check`（検査のみ）と `format`（自動修正）を追加する
+- **検査・整形設定**: `biome.json` 1 ファイル。`.gitignore` を尊重して `node_modules` と `.next` を除外し、加えて `public`（外部提供のアセット。ロゴ画像が a11y ルールに抵触し、自動整形では解消しない）と `.kiro`（cc-sdd が管理する仕様書とテンプレート。整形すると更新時に競合する）も対象外とする。`package.json` に `check`（検査のみ）と `format`（自動修正）を追加する
 - **テスト設定**: `vitest.config.ts` で `environment: "jsdom"`、`globals: true`、`setupFiles`、`@/` エイリアスの解決を設定する。`vitest.setup.ts` で Testing Library のマッチャを登録する
 
 ## Error Handling
