@@ -65,7 +65,7 @@
 
 - [ ] 3. 遮断点の結線
 
-- [ ] 3.1 全経路を遮断する関門を実装する
+- [x] 3.1 全経路を遮断する関門を実装する
   - 現行のフレームワーク規約に従った関門のファイルを、アプリと同じ階層に置く
   - 認証情報は**要求ごとに読み出し**、判定は 2.1 の検証関数に委譲する。関門自身は判定ロジックを持たない
   - **認証情報が無い場合の振る舞いを環境で分ける。手元では素通りさせ、公開する環境では要求を通さず設定の不足を示す応答を返す**
@@ -132,6 +132,9 @@
 - **1.4**: hook 管理ツールは内部ファイル用の `.gitignore` を自身で生成する。追跡されるのは `pre-commit` 1 ファイルのみで、`core.hooksPath` は自動で設定される
 - **1.3**: テスト設定ファイルは `.mts` にする。`.ts` だと `package.json` に `"type": "module"` が無いため CommonJS として読まれ、`import.meta.url` が「将来の Vite で動かなくなる」警告を出す
 - **1.3**: 監視モードのコマンドには `--watch` を明示する。省略すると TTY でない環境（スクリプトや CI）では監視にならず 1 回実行して終了する。環境で挙動が変わる書き方は避ける
+- **3.1**: `.gitignore` の `.env*` は `.env.local.example` も除外してしまう。`!.env.local.example` を足さないとテンプレートを追跡できない。設計書の Modified Files は「`.gitignore` は変更不要」としており、**記述と差異がある**
+- **3.1**: `matcher` の除外パターンではピリオドをエスケープする。`manifest.webmanifest` のままだと正規表現のワイルドカードとして働き、`/manifestXwebmanifest` のような無関係なパスまで除外に落ちる。**Next.js 公式のサンプル（`favicon.ico` など）もエスケープしていないため、そのまま真似すると穴になる**
+- **3.1**: Next.js 16 は同一ディレクトリでの `next dev` 多重起動を拒否する（ポートを分けても不可）。環境変数を変えて挙動を比べるときは 1 つずつ起動して停止する
 - **2.2**: 生成された HTML の `<link rel="manifest">` に **`crossorigin="use-credentials"` は付与されなかった**。出力は `<link rel="manifest" href="/manifest.webmanifest"/>` のみ。設計書が「付与される想定」としていた前提は**成立しない**。4.2 の確認項目 12 がこの時点で失敗したことになる。対処（`layout.tsx` で手動の `<link>` を出力するか、`matcher` から manifest を除外するか）は人の判断を要するため、このタスクでは行わない
 - **2.2**: `background_color` / `theme_color` は設計書に値の指定が無いため、`globals.css` の `--background: #ffffff` と `--foreground: #171717` に揃えた。manifest は単一値しか持てないため、ライトモードの配色を基準にしている
 - **2.1**: 環境変数を受け取る関数の引数に `NodeJS.ProcessEnv` を使うと、Next.js がこの型を拡張して `NODE_ENV` を必須にしているため、テストから部分的なオブジェクトリテラルを渡せない。`pnpm test` と検査は通るのに `next build` の型検査だけが落ちる。`Record<string, string | undefined>` を受ければ `process.env` も渡せてテストも書ける。**フレームワークが拡張しうるグローバル型は関数の引数に使わない**。この変更に伴い design.md の Service Interface も更新した
