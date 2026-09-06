@@ -105,9 +105,21 @@ Password Protection は Pro + 月 $150 のアドオンか Enterprise が必要�
 
 ブラウザがパスワードを記憶するため、スマホからの利用でも毎回の入力にはならない。
 
-### PWA 化する
+### PWA 化する — Service Worker は入れない
 
-ホーム画面から起動できるようにする。manifest、Service Worker、アイコン一式が必要。
+ホーム画面から起動できるようにする。必要なのは manifest とアイコンだけで、
+**Service Worker は入れない**。
+
+インストール可能と判定される条件は HTTPS と有効な manifest であり、
+Service Worker は必須ではない。Service Worker が要るのはオフライン動作・
+バックグラウンド同期・プッシュ通知で、いずれも本アプリでは使わない。
+むしろ Basic 認証と併用すると認証ダイアログが表示されなくなる不具合や、
+キャッシュにより認証プロンプトが二度と出なくなる問題が報告されているため、
+入れない方が安全。
+
+manifest はブラウザが認証情報を伴わずに取得するため、そのままでは
+Basic 認証下で 401 になる。`<link rel="manifest" crossorigin="use-credentials">`
+を指定して認証情報を送る。
 
 ## 着手時に導入するもの
 
@@ -118,7 +130,7 @@ Password Protection は Pro + 月 $150 のアドオンか Enterprise が必要�
 | Biome | Lint / フォーマット |
 | Vitest | テスト |
 | middleware（Basic 認証） | 公開 URL の保護 |
-| manifest / Service Worker | ホーム画面からの起動 |
+| manifest とアイコン | ホーム画面からの起動 |
 
 ## 初期スコープ外
 
