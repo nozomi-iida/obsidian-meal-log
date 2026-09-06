@@ -6,7 +6,7 @@
 
 **Users**: 利用者本人ひとり。開発者と利用者が同一人物である。
 
-**Impact**: `create-next-app` 直後の状態を変更する。ルート直下に設定ファイル 3 つ（`biome.json` / `vitest.config.ts` / `vitest.setup.ts`）が加わり、`src/` に認証と manifest の 3 ファイルが加わる。既存の 2 コンポーネントは整形の対象になる。
+**Impact**: `create-next-app` 直後の状態を変更する。ルート直下に設定ファイル 3 つ（`biome.json` / `vitest.config.mts` / `vitest.setup.ts`）が加わり、`src/` に認証と manifest の 3 ファイルが加わる。既存の 2 コンポーネントは整形の対象になる。
 
 ### Goals
 
@@ -107,7 +107,7 @@ graph TB
 
 ```
 biome.json                      検査と整形の設定
-vitest.config.ts                テスト環境の設定
+vitest.config.mts               テスト環境の設定
 vitest.setup.ts                 Testing Library のマッチャ登録
 .env.local.example              必要な環境変数の名称と説明
 
@@ -328,17 +328,17 @@ export default function manifest(): MetadataRoute.Manifest;
 
 - **検査・整形設定**: `biome.json` 1 ファイル。`.gitignore` を尊重して `node_modules` と `.next` を除外し、加えて `public`（外部提供のアセット。ロゴ画像が a11y ルールに抵触し、自動整形では解消しない）と `.kiro`（cc-sdd が管理する仕様書とテンプレート。整形すると更新時に競合する）も対象外とする。`package.json` に `check`（検査のみ）と `format`（自動修正）を追加する
 - **コミット前の自動検査**: git の `pre-commit` から、**コミットに含めようとしているファイルのみ**を検査する。検査ツール自身が対象を絞る機能（`--staged`）を持つため、ステージ済みファイルを抽出する別のツールは要さない。hook は**リポジトリに含める**形で管理し、依存の導入時に自動で有効化する。`.git/hooks/` に直接置く方式は採らない。`.git/` は複製されず、別の環境でクローンしたときに効かないため
-- **テスト設定**: `vitest.config.ts` で `environment: "jsdom"`、`globals: true`、`setupFiles`、`@/` エイリアスの解決を設定する。`vitest.setup.ts` で Testing Library のマッチャを登録する
+- **テスト設定**: `vitest.config.mts` で `environment: "jsdom"`、`globals: true`、`setupFiles`、`@/` エイリアスの解決を設定する。`vitest.setup.ts` で Testing Library のマッチャを登録する。拡張子を `.mts` にするのは、`package.json` に `"type": "module"` が無いと `.ts` が CommonJS として読まれ、`import.meta.url` が警告の対象になるため
 
 ## Error Handling
 
 ### Error Strategy
 
-設定漏れは起動時に落とし、実行時のエラーは利用者に見える形で返す。認証に関わる失敗は理由を明かさない。
+設定漏れの扱いは環境で分ける。手元では素通りさせ、公開する環境では要求を通さない。実行時のエラーは利用者に見える形で返す。認証に関わる失敗は理由を明かさない。
 
 ### Error Categories and Responses
 
-**設定エラー（起動時）**: 環境変数が未設定 → モジュール読み込み時に例外。メッセージに不足している変数名を含める。値は含めない
+**設定エラー（要求時）**: 環境変数が未設定 → 手元では素通りさせ、公開する環境では 500 を返す。応答に不足している変数名を含める。値は含めない。判定は要求ごとに行い、モジュール読み込み時には例外を投げない
 
 **認証エラー（401）**: ヘッダなし / 形式不正 / 値の不一致 → いずれも同一の 401 応答を返す。「ユーザ名が違う」「パスワードが違う」を区別しない。区別すると総当たりの手掛かりになる
 
