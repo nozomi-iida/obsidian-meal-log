@@ -38,7 +38,7 @@
 
 - [ ] 2. vault への書き込み
 
-- [ ] 2.1 vault への書き込みを実装する
+- [x] 2.1 vault への書き込みを実装する
   - 保存先に Markdown を新規作成する手段を用意する。**既存ファイルの取得と識別子の受け渡しを行わない**
   - 設定は実行環境から**要求ごとに**読み出す。すべて揃っていなければ未設定として扱う
   - 応答を成功・重複・権限・通信の 4 つに分類する。**重複はステータスコード 422 で判定する**
@@ -170,6 +170,8 @@ Revalidation Triggers に従い、報告して人の判断を仰ぐ。
 ## Implementation Notes
 
 - **1.1**: 新規ファイルを追加するタスクでは、RED フェーズの証拠が「import を解決できない」というエラーになる。アサーション単位の RED にはならないため、**テストが振る舞いを識別することは突然変異テストで裏づける**（実装を壊してテストが落ちるかを確かめ、確認後に復元する）
+- **2.1**: `.env*` には permission の deny ルールがあり、Read / Write / Edit ツールから触れない。雛形ファイル（`.env.local.example`）への追記も同じ制限を受ける。**差分の確認は `git diff`（ファイル名を引数に取らない形）なら通る**。内容を検証できないまま編集を進めないこと
+- **2.1**: 外部 API を叩くコンポーネントにテストを置かない代わりに、**実測で完了状態を確認する**。スクリプトはリポジトリ外（scratchpad）に置き、テスト用のファイルは `sha` を使って必ず削除する。削除後に GET が 404 を返すことまで確認する
 - **1.3**: `buildFileName` / `buildNote` は `Date` を一切使わない。受け取った日付と時刻の文字列をそのまま組み立てる。**`TZ` を変えてテストが通ることで担保する**（`TZ=UTC` と `TZ=Asia/Tokyo` の両方。片方でも落ちたらどこかで日時を解釈している）
 - **1.3**: frontmatter の**順序**は design.md の Postconditions の列挙ではなく、Data Contracts & Integration の Markdown 実例に従う（`date / time / meal / dish / menu / kcal / protein / foods`）。`product.md` の実例と一致する。Postconditions の列挙は項目の所属を示すものである旨を design.md に明記した
 - **1.2**: `estimateMealKind` は `getHours()` でホストのローカルタイムを見る。**Vercel の既定は UTC** なので、サーバー側から呼ぶと区分が約 9 時間ずれる（`2026-10-11T19:00:00Z` は UTC で 19 時 = 夜、JST で 4 時 = 寝る前）。**design.md は呼び出し位置について 3 箇所で食い違っている** — 食事区分の推定の Implementation Notes は「記録フォームが呼ぶ」（クライアント）、記録の受付の Dependencies と Architecture の図は Server Action から呼ぶ形。**1.3 / 3.1 / 4.2 の着手前に確定が必要**
