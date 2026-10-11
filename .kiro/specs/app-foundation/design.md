@@ -111,6 +111,9 @@ vitest.config.mts               テスト環境の設定
 vitest.setup.ts                 Testing Library のマッチャ登録
 .env.local.example              必要な環境変数の名称と説明
 
+.husky/
+└── pre-commit                  コミット前の検査。ステージ済みファイルのみを対象にする
+
 src/
 ├── proxy.ts                    全要求の遮断点。Next.js の規約ファイル
 ├── lib/
@@ -129,7 +132,7 @@ src/
 - `package.json` — `scripts` に検査・整形・テストの 3 系統を追加。`devDependencies` に Biome と Vitest 一式を追加
 - `src/app/layout.tsx` — `metadata` のタイトルと説明を `Create Next App` から実際の名称に変更。整形の対象にもなる
 - `src/app/page.tsx` — 整形の対象。内容は変更しない
-- `.gitignore` — `.env.local` は既に `.env*` で除外済みのため変更不要
+- `.gitignore` — `.env.local` は既に `.env*` で除外済み。ただしこのパターンは `.env.local.example` も除外するため、雛形を追跡できるよう `!.env.local.example` を追加する
 
 ## System Flows
 
@@ -171,7 +174,7 @@ sequenceDiagram
 | 3.1, 3.2, 3.3 | 認証の要求と通過 | 遮断点 / 認証判定 | `proxy` / `verifyCredentials` | 認証フロー |
 | 3.4 | 認証が有効なとき全経路が対象（メタデータを除く） | 遮断点 | `config.matcher`（manifest とアイコンのみ除外） | 認証フロー |
 | 3.5 | 認証情報を含めない | 遮断点 | 環境変数 | — |
-| 3.6 | 手元で未設定なら素通り | 遮断点 | `loadCredentials` が `null` | 認証フロー |
+| 3.6 | 手元で未設定なら素通り | 遮断点 / 認証判定 | `loadCredentials` が `null` | 認証フロー |
 | 3.7 | 公開環境で未設定なら通さない | 遮断点 | 500 応答 | 認証フロー |
 | 4.1, 4.2, 4.3 | 追加情報の提供と全画面起動 | アプリマニフェスト | `MetadataRoute.Manifest` | — |
 
@@ -179,8 +182,8 @@ sequenceDiagram
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| 認証判定 | ドメイン | 認証ヘッダの検証 | 3.1, 3.2, 3.3 | なし | Service |
-| 遮断点 | ランタイム | 全要求の関門 | 3.1〜3.5 | 認証判定 (P0) | Service |
+| 認証判定 | ドメイン | 認証ヘッダの検証 | 3.1, 3.2, 3.3, 3.6 | なし | Service |
+| 遮断点 | ランタイム | 全要求の関門 | 3.1〜3.7 | 認証判定 (P0) | Service |
 | アプリマニフェスト | メタデータ | 追加情報の提供 | 4.1, 4.2, 4.3 | なし | Service |
 | 検査・整形設定 | 開発ツール | 品質チェック | 1.1〜1.5 | なし | — |
 | テスト設定 | 開発ツール | テスト実行 | 2.1〜2.5 | なし | — |
@@ -192,7 +195,7 @@ sequenceDiagram
 | Field | Detail |
 |-------|--------|
 | Intent | `Authorization` ヘッダの値が、設定された認証情報と一致するかを判定する |
-| Requirements | 3.1, 3.2, 3.3 |
+| Requirements | 3.1, 3.2, 3.3, 3.6 |
 
 **Responsibilities & Constraints**
 
@@ -249,7 +252,7 @@ export function verifyCredentials(
 | Field | Detail |
 |-------|--------|
 | Intent | すべての要求を受け、認証を通らないものをアプリに到達させない |
-| Requirements | 3.1, 3.2, 3.3, 3.4, 3.5 |
+| Requirements | 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7 |
 
 **Responsibilities & Constraints**
 
