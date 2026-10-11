@@ -406,7 +406,7 @@ export function buildNote(record: MealRecord): string;
 - **Preconditions**: `record.items` は 1 件以上。`record.eatenAt.date` は `YYYY-MM-DD`、`record.eatenAt.time` は `HH:mm` の形式（検証は記録の受付が行う）
 - **Postconditions**:
   - `buildFileName` は `YYYY-MM-DD-HHmm.md` の形式を返す。**受け取った文字列から組み立て、日時の計算をしない**（4.2, 3.5）
-  - `buildNote` の frontmatter は `date` / `time` / `meal` / `menu` / `kcal` / `protein` / `foods` / `dish` を持つ
+  - `buildNote` の frontmatter は `date` / `time` / `meal` / `menu` / `kcal` / `protein` / `foods` / `dish` を持つ（**これは項目の所属を示すもので、出力の順序ではない。順序は下記 Data Contracts & Integration の実例に従う**）
   - `menu` は `白米300g / 鶏もも400g` のように食材名と量を並べた文字列（4.4）
   - `foods` は量を含まない名前の配列（4.5）
   - 本文は食材ごとに `- 白米 300g — 468 / P8` の形で並べる（4.6）

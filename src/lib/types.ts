@@ -22,9 +22,22 @@ export type MealItem = {
  */
 export type MealKind = "朝" | "昼" | "夜" | "間食" | "寝る前";
 
+/**
+ * 食べた日時。**タイムゾーンを持たない。**
+ *
+ * `<input type="datetime-local">` の値をそのまま分解して保持する。実行環境の
+ * タイムゾーンに依存しないため、サーバーがどこで動いても同じ値が vault に書かれる。
+ */
+export type LocalDateTime = {
+  /** `YYYY-MM-DD` 形式の日付。 */
+  readonly date: string;
+  /** `HH:mm` 形式の時刻。 */
+  readonly time: string;
+};
+
 /** 記録 1 件の内容。 */
 export type MealRecord = {
-  readonly eatenAt: Date;
+  readonly eatenAt: LocalDateTime;
   readonly kind: MealKind;
   readonly dish: string | null;
   readonly items: readonly MealItem[];

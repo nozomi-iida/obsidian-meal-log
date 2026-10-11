@@ -22,7 +22,7 @@
   - _Boundary: 食事区分の推定_
   - _Depends: 1.1_
 
-- [ ] 1.3 (P) ノートの生成を実装する
+- [x] 1.3 (P) ノートの生成を実装する
   - 記録からファイル名と Markdown の全文を組み立てる手段を用意する
   - ファイル名は食べた時刻から分の単位まで含めて決める
   - frontmatter は 8 項目すべてを出力する。**料理名が無い場合も項目を出し、値を空にする**
@@ -170,6 +170,8 @@ Revalidation Triggers に従い、報告して人の判断を仰ぐ。
 ## Implementation Notes
 
 - **1.1**: 新規ファイルを追加するタスクでは、RED フェーズの証拠が「import を解決できない」というエラーになる。アサーション単位の RED にはならないため、**テストが振る舞いを識別することは突然変異テストで裏づける**（実装を壊してテストが落ちるかを確かめ、確認後に復元する）
+- **1.3**: `buildFileName` / `buildNote` は `Date` を一切使わない。受け取った日付と時刻の文字列をそのまま組み立てる。**`TZ` を変えてテストが通ることで担保する**（`TZ=UTC` と `TZ=Asia/Tokyo` の両方。片方でも落ちたらどこかで日時を解釈している）
+- **1.3**: frontmatter の**順序**は design.md の Postconditions の列挙ではなく、Data Contracts & Integration の Markdown 実例に従う（`date / time / meal / dish / menu / kcal / protein / foods`）。`product.md` の実例と一致する。Postconditions の列挙は項目の所属を示すものである旨を design.md に明記した
 - **1.2**: `estimateMealKind` は `getHours()` でホストのローカルタイムを見る。**Vercel の既定は UTC** なので、サーバー側から呼ぶと区分が約 9 時間ずれる（`2026-10-11T19:00:00Z` は UTC で 19 時 = 夜、JST で 4 時 = 寝る前）。**design.md は呼び出し位置について 3 箇所で食い違っている** — 食事区分の推定の Implementation Notes は「記録フォームが呼ぶ」（クライアント）、記録の受付の Dependencies と Architecture の図は Server Action から呼ぶ形。**1.3 / 3.1 / 4.2 の着手前に確定が必要**
 - **1.2**: 時刻を扱うテストは `new Date(年, 月, 日, 時, 分)` でローカルタイムとして組む。こう書くと `TZ` を変えてもテストが通る（UTC / America/New_York / Asia/Tokyo で確認済み）
 - **1.1**: 丸めの規則をテストで識別するには、**丸め順で結果が変わるデータ**を選ぶ必要がある。7.5 と 2.5 の組を使った（丸めてから足すと 11、足してから丸めると 10）。同じ値になるデータでは受入基準 2.4 を証明できない
