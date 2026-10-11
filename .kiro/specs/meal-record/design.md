@@ -66,6 +66,7 @@
 - **遮断点の `matcher` を変更したとき** — Server Action への POST が保護から外れうる（`app-foundation` の申し送り）
 - **丸めの規則を変更したとき** — 過去の記録と新しい記録で数値の意味が変わり、月次の比較が成り立たなくなる
 - **外部 API の応答の分類が変わったとき** — 重複を 422 で判定している。GitHub が検証の分類を変えると、重複以外の 422 を重複と誤判定する
+- **サーバー側に日時を解釈する処理を入れたとき** — 実行環境のタイムゾーン（Vercel の既定は UTC）で日付がずれる。日時はクライアントが確定し、サーバーは文字列として扱う
 
 ## Architecture
 
@@ -97,8 +98,8 @@ graph TB
     Proxy --> Form
     Form --> Action
     Form --> Nutrition
+    Form --> MealTime
     Action --> Nutrition
-    Action --> MealTime
     Action --> Note
     Action --> Vault
     Note --> Nutrition
@@ -263,9 +264,20 @@ export type MealItem = {
 /** 食事区分。 */
 export type MealKind = "朝" | "昼" | "夜" | "間食" | "寝る前";
 
+/**
+ * 食べた日時。**タイムゾーンを持たない。**
+ *
+ * `<input type="datetime-local">` の値をそのまま分解して保持する。実行環境の
+ * タイムゾーンに依存しないため、サーバーがどこで動いても同じ値が vault に書かれる。
+ */
+export type LocalDateTime = {
+  readonly date: string;
+  readonly time: string;
+};
+
 /** 記録 1 件の内容。 */
 export type MealRecord = {
-  readonly eatenAt: Date;
+  readonly eatenAt: LocalDateTime;
   readonly kind: MealKind;
   readonly dish: string | null;
   readonly items: readonly MealItem[];
@@ -353,7 +365,9 @@ export function estimateMealKind(eatenAt: Date): MealKind;
 
 **Implementation Notes**
 
-- Integration: 記録フォームが初期表示と時刻変更時に呼ぶ
+- **Integration: クライアント側でのみ呼ぶ。** 記録フォームが初期表示と時刻変更時に呼び、推定した区分を送信データに含める。**サーバー側からは呼ばない**
+- **なぜサーバーから呼ばないか**: この関数は `getHours()` でホストのローカルタイムを見る。Vercel の既定は UTC であり、サーバーから呼ぶと区分が約 9 時間ずれる（`2026-10-11T19:00:00Z` は UTC で 19 時 = 夜、JST で 4 時 = 寝る前）。ブラウザのローカルタイムは利用者の端末の時刻なので、クライアントで呼ぶ限り正しい
+- **利用者の指定を消さないため**: 受入基準 3.4 は「利用者が自ら選んだ区分を保持する」と定めている。サーバーが推定し直すとその指定が失われる。**区分は推定結果でも手動の指定でも、確定した値として送信データに含める**
 - Validation: 各境界（4:59 / 5:00 / 11:59 / 12:00 / 15:59 / 16:00 / 18:59 / 19:00 / 22:59 / 23:00）を単体テストで確かめる
 - Integration: 区切りは利用者の食事の時間から引いた。**普段の 5 食がいずれも手直し不要になる**ように配置してある
 - Risks: 生活が変わると推定が合わなくなる。その場合は境界の数値を変えるだけで済む。区分そのものを増減する変更は vault の既存ノートと整合しなくなるため、Revalidation Triggers に該当する
@@ -368,6 +382,7 @@ export function estimateMealKind(eatenAt: Date): MealKind;
 **Responsibilities & Constraints**
 
 - 文字列を組み立てるだけ。書き込みは行わない
+- **日時を解釈しない。** `Date` を組み立てず、タイムゾーンに依存する処理を持たない
 - frontmatter の 8 項目をすべて出力する。料理名が無い場合の扱いは下記 Postconditions に定める
 - 数値に単位を付けない（2.5）
 
@@ -388,9 +403,9 @@ export function buildFileName(record: MealRecord): string;
 export function buildNote(record: MealRecord): string;
 ```
 
-- **Preconditions**: `record.items` は 1 件以上
+- **Preconditions**: `record.items` は 1 件以上。`record.eatenAt.date` は `YYYY-MM-DD`、`record.eatenAt.time` は `HH:mm` の形式（検証は記録の受付が行う）
 - **Postconditions**:
-  - `buildFileName` は `YYYY-MM-DD-HHmm.md` の形式を返す（4.2, 3.5）
+  - `buildFileName` は `YYYY-MM-DD-HHmm.md` の形式を返す。**受け取った文字列から組み立て、日時の計算をしない**（4.2, 3.5）
   - `buildNote` の frontmatter は `date` / `time` / `meal` / `menu` / `kcal` / `protein` / `foods` / `dish` を持つ
   - `menu` は `白米300g / 鶏もも400g` のように食材名と量を並べた文字列（4.4）
   - `foods` は量を含まない名前の配列（4.5）
@@ -400,7 +415,8 @@ export function buildNote(record: MealRecord): string;
 
 **Implementation Notes**
 
-- Integration: 時刻の整形はローカルタイムで行う。vault は日本時間の生活記録であり、UTC で書くと日付がずれる
+- **Integration: 受け取った日付と時刻の文字列をそのまま使う。時刻の解釈をしない。** `Date` を組み立てたり `getHours()` を呼んだりしない。実行環境のタイムゾーンに依存する処理を一切持たないことで、**サーバーがどこで動いても同じ値が vault に書かれる**
+- **なぜ文字列で受けるか**: `vault` は日本時間の生活記録である。サーバー側で `Date` を整形すると Vercel の既定（UTC）で日付がずれる。クライアントの `<input type="datetime-local">` が返すタイムゾーンなしの値を分解して渡すことで、ずれる余地を構造的に消す
 - Validation: frontmatter の 8 項目、`menu` と `foods` の違い、本文と合計の一致、料理名を省略したときに `dish` が空で出ることを単体テストで確かめる
 - Integration: **料理名が無くても `dish` の行は出す。** 8 項目が常に揃うため、Obsidian 側で「プロパティが無いノート」を考慮しなくて済む。寝る前のバナナやプロテインのように料理名を持たない記録が多いため、ここが揃っているほうが一覧が安定する
 
@@ -508,7 +524,7 @@ export function writeNote(
 **Dependencies**
 
 - Inbound: 記録フォーム（P0）
-- Outbound: 栄養価の算出、食事区分の推定、ノートの生成、vault への書き込み（P0）
+- Outbound: 栄養価の算出、ノートの生成、vault への書き込み（P0）。**食事区分の推定は呼ばない**（クライアントが確定した区分を受け取る）
 - Outbound: `app-foundation` の `basic-auth` — 認証の検証（P1）
 
 **Contracts**: Service [x]
@@ -540,6 +556,8 @@ export function recordMeal(
 
 - **Preconditions**: なし
 - **Postconditions**:
+  - 送信された日時の文字列（`YYYY-MM-DDTHH:mm`）を日付と時刻に分解する。**`Date` を組み立てない**
+  - 送信された食事区分をそのまま使う。**推定し直さない**（受入基準 3.4 の指定を消さないため）
   - 認証情報が設定されているのに要求の `Authorization` が検証を通らない場合は、
     何も行わず `reason: "unauthorized"` を返す
   - 入力が不正な場合は書き込みを試みず `reason: "invalid"` を返す（1.5, 1.6, 2.6）
@@ -574,13 +592,16 @@ export function recordMeal(
 **Dependencies**
 
 - Inbound: 記録画面（P0）
-- Outbound: 記録の受付 — 送信（P0）、栄養価の算出 — 合計の表示（P0）
+- Outbound: 記録の受付 — 送信（P0）、栄養価の算出 — 合計の表示（P0）、食事区分の推定 — 区分の初期値と時刻変更時の更新（P0）
 
 **Contracts**: なし（状態は内部に閉じる）
 
 **Implementation Notes**
 
 - Integration: `useActionState(recordMeal, { status: "idle" })` で `[state, formAction, pending]` を得る
+- **日時の入力**: `<input type="datetime-local">` を使う。この入力欄の値は `2026-10-11T19:00` のように**タイムゾーン情報を持たない文字列**であり、そのまま送信すればサーバー側で解釈する必要がなくなる
+- **区分の推定**: 入力された日時文字列を `new Date("2026-10-11T19:00")` でパースして `estimateMealKind` に渡す。**日時を含む ISO 文字列はローカルタイムとして解釈される**ため、ブラウザでは利用者の端末の時刻になる。日付のみの文字列（`new Date("2026-10-11")`）は UTC として解釈されるので、**時刻を落とさないこと**
+- **区分の送信**: 推定した区分も、利用者が自ら選んだ区分も、確定した値として送信データに含める。サーバーは推定し直さない（受入基準 3.4）
 - Validation: 食材が 0 件のとき、数値が不正なとき、名前が空のときは送信ボタンを押せない状態にする。サーバー側の検証と二重になるが、**画面側で弾くほうが利用者に早く伝わる**
 - Risks: 合計の表示に `sumNutrition` を使うため、クライアント側に算出ロジックが読み込まれる。資格情報ではないため問題にならない
 - Risks: 1 食材につき 4 項目（名前・100g あたり 2 値・量）を打つ。**3 品で 12 項目**になる。初期リリースの最大の弱点であり、栄養価の推定を次の spec で入れる動機になる
@@ -598,6 +619,7 @@ export function recordMeal(
 
 ### Domain Model
 
+- **`LocalDateTime`**（値オブジェクト）— 食べた日時。**タイムゾーンを持たない。** `<input type="datetime-local">` の値を分解したもの。不変
 - **`FoodInput`**（値オブジェクト）— 利用者が入力した食材 1 件。名前・100g あたりの概算値・量を持つ。不変。**どこにも保存されない**
 - **`MealItem`**（値オブジェクト）— 量が決まった食材。栄養価は整数に丸められている。不変
 - **`MealRecord`**（集約）— 記録 1 件。時刻・区分・料理名・食材の集まりを持つ。**ファイル名はこの集約から導かれる**
@@ -630,8 +652,8 @@ foods: [白米, 鶏もも]
 
 | 項目 | 型 | 由来 |
 |---|---|---|
-| `date` | 日付（`YYYY-MM-DD`） | `eatenAt` のローカル日付 |
-| `time` | 文字列（`HH:mm`） | `eatenAt` のローカル時刻 |
+| `date` | 日付（`YYYY-MM-DD`） | `eatenAt.date` をそのまま。変換しない |
+| `time` | 文字列（`HH:mm`） | `eatenAt.time` をそのまま。変換しない |
 | `meal` | `MealKind` | 推定または利用者の指定 |
 | `dish` | 文字列 | 任意。無ければ値を空にして行は出す |
 | `menu` | 文字列 | 食材名と量の連結 |
