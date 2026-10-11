@@ -2,34 +2,39 @@
 
 ## Overview
 
-**Purpose**: 外出先のスマホから食事を記録し、vault に 1 食 1 ファイルの Markdown を置く。利用者は食材を選び、量をグラムで指定して送信するだけで済み、カロリーとタンパク質の計算を自分で行わない。
+**Purpose**: 外出先のスマホから食事を記録し、vault に 1 食 1 ファイルの Markdown を置く。利用者は食材の名前と 100g あたりの概算値、食べた量を入力し、カロリーとタンパク質の掛け算は自分で行わない。
 
 **Users**: 利用者本人ひとり。開発者と同一人物である。
 
-**Impact**: `app-foundation` が用意した土台の上に、初めて機能を載せる。雛形ページを記録画面に置き換え、`src/lib/` に純粋関数を 4 つ、`src/app/` に Server Action と画面を追加する。アプリが外部へ書き込みを行うようになるため、書き込み用の資格情報を環境変数に追加する。
+**Impact**: `app-foundation` が用意した土台の上に、初めて機能を載せる。雛形ページを記録画面に置き換え、`src/lib/` に純粋関数を 3 つ、`src/app/` に Server Action と画面を追加する。アプリが外部へ書き込みを行うようになるため、書き込み用の資格情報を環境変数に追加する。
+
+**データを貯めない**: アプリは食材のデータもプリセットも保持しない。記録のたびに入力を受ける。貯める仕組みと栄養価の推定は後続の spec が扱う。
 
 ### Goals
 
-- 食材を選び、量を調整して送信すると、vault に正しい形の Markdown が 1 つ置かれる
-- カロリーとタンパク質を 100g あたりの概算値から自動で算出する
+- 食材を入力して送信すると、vault に正しい形の Markdown が 1 つ置かれる
+- カロリーとタンパク質を、入力された 100g あたりの値と量から算出する
 - 記録できたかどうかがその場で分かり、失敗しても入力が失われない
 - 書き込み用の資格情報を利用者の端末に渡さない
 
 ### Non-Goals
 
-- プリセットの登録・編集。本 spec はソースコードに持つ定数のみを扱う
-- 献立単位のプリセット。食材単位のみ
+- **プリセット**。食材のデータを貯める仕組みを一切持たない
+- **栄養価の推定**。100g あたりの値は利用者が調べて入力する
+- 食材名の正規化。入力された文字列をそのまま使う
+- 献立単位の記録。食材単位のみ
 - 集計・サマリーの更新。Obsidian の Bases と Dataview が担う
 - 記録した内容の一覧表示と検索
 - 写真からの推定
 - 既存ファイルの更新。書き込みは常に新規作成
 
+初期リリースの入力は手間がかかる。それを承知のうえで、**まず記録が vault に届く経路を通すこと**を優先する。使ってみて初めて、何を自動化すべきかが具体的に分かる。
+
 ## Boundary Commitments
 
 ### This Spec Owns
 
-- プリセットの食材データ（名前・100g あたりの概算値・既定の量）
-- 量から導くカロリーとタンパク質の算出、丸め、合計
+- 入力された 100g あたりの値と量から導くカロリーとタンパク質の算出、丸め、合計
 - 時刻から食事区分を推定する規則
 - vault に置く Markdown の形（ファイル名・frontmatter・本文）
 - vault への書き込みの実行と、その結果の分類
@@ -38,7 +43,8 @@
 ### Out of Boundary
 
 - **アクセス制御の仕組み**。Basic 認証の判定も遮断点も `app-foundation` が持つ。本 spec は既存の判定関数を**呼ぶ**だけで、認証方式を定義しない
-- **プリセットの永続化**。登録・編集・保存先の決定は後続の spec
+- **食材のデータを貯めること**。プリセットの保持・登録・選択はすべて後続の spec。**アプリは記録のたびに入力を受けるだけで、何も覚えない**
+- **栄養価の推定**。食材名から 100g あたりの値を出す仕組みは後続の spec。本 spec では利用者が調べて入力する
 - **vault の同期**。obsidian-git が担う。記録の完了は**vault への書き込みが終わった時点**で判断する
 - **集計**。日次・月次の合計は Obsidian 側が算出する。アプリは合計を保存しない
 - **`Meals/presets.md` の読み取り**。読み取り経路そのものを作らない（`tech.md`）
@@ -56,7 +62,7 @@
 
 - **vault のファイル形式を変更したとき** — Obsidian 側の Bases / Dataview のクエリが成り立たなくなる
 - **環境変数の名称を変更したとき** — 配置環境の設定と齟齬が生じ、記録できなくなる
-- **プリセットの保存先を外部へ移したとき** — 読み取り経路が生まれ、「書き込みのみ」という依存の制約が崩れる
+- **食材のデータを貯める仕組みを入れたとき** — 読み取り経路が生まれ、「書き込みのみ」という依存の制約が崩れる。栄養価の推定を入れる場合も同様に外部への問い合わせが増える
 - **遮断点の `matcher` を変更したとき** — Server Action への POST が保護から外れうる（`app-foundation` の申し送り）
 - **丸めの規則を変更したとき** — 過去の記録と新しい記録で数値の意味が変わり、月次の比較が成り立たなくなる
 - **外部 API の応答の分類が変わったとき** — 重複を 422 で判定している。GitHub が検証の分類を変えると、重複以外の 422 を重複と誤判定する
@@ -81,7 +87,6 @@ graph TB
     Proxy[proxy]
     Form[record-form]
     Action[actions]
-    Presets[presets]
     Nutrition[nutrition]
     MealTime[meal-time]
     Note[note]
@@ -91,7 +96,7 @@ graph TB
     Browser --> Proxy
     Proxy --> Form
     Form --> Action
-    Form --> Presets
+    Form --> Nutrition
     Action --> Nutrition
     Action --> MealTime
     Action --> Note
@@ -100,7 +105,6 @@ graph TB
     Vault --> GitHub
 
     subgraph HTTP を知らない層
-        Presets
         Nutrition
         MealTime
         Note
@@ -110,13 +114,13 @@ graph TB
 **Architecture Integration**:
 
 - **選択したパターン**: Server Action を配線に徹させ、判断と生成を純粋関数に分離する。層と呼べる構造は持たない
-- **境界の分け方**: 「外部と通信する層（`vault`）」「配線する層（`actions`）」「何も知らない層（`presets` / `nutrition` / `meal-time` / `note`）」の 3 つ。後者は `fetch` にも `FormData` にも依存しない
+- **境界の分け方**: 「外部と通信する層（`vault`）」「配線する層（`actions`）」「何も知らない層（`nutrition` / `meal-time` / `note`）」の 3 つ。後者は `fetch` にも `FormData` にも依存しない
 - **既存パターンの維持**: サーバーコンポーネント既定、`@/` エイリアス、App Router のファイル規約を変更しない
 - **新規要素の根拠**: 純粋関数を分けるのは、単体テストを HTTP の組み立てなしに書けるようにするため。`app-foundation` の `basic-auth` が同じ構造で成立した
 
-**依存の方向**: `types` → `presets` / `nutrition` / `meal-time` → `note` → `vault` → `actions` → UI。各層は左側のみを import する。**逆向きの import は誤りとして扱う。**
+**依存の方向**: `types` → `nutrition` / `meal-time` → `note` → `vault` → `actions` → UI。各層は左側のみを import する。**逆向きの import は誤りとして扱う。**
 
-`record-form` が `presets` を直接 import するのは、食材の一覧を描くためである。定数データの参照であり、依存の方向に反しない。
+`record-form` が `nutrition` を直接 import するのは、合計をその場で表示するためである。サーバー側と同じ関数を通すので、**画面に出る数字と vault に書かれる数字が一致する。**
 
 ### Technology Stack
 
@@ -137,8 +141,7 @@ graph TB
 src/
 ├── lib/
 │   ├── types.ts             食材・記録・結果の型。他のモジュールが参照する
-│   ├── presets.ts           プリセットの食材データ。定数のみ
-│   ├── nutrition.ts         量から栄養価を算出し、丸めて合計する
+│   ├── nutrition.ts         入力値から栄養価を算出し、丸めて合計する
 │   ├── nutrition.test.ts
 │   ├── meal-time.ts         時刻から食事区分を推定する
 │   ├── meal-time.test.ts
@@ -150,6 +153,8 @@ src/
     ├── record-form.tsx      記録フォーム。クライアントコンポーネント
     └── page.tsx             記録画面。フォームを置くだけ
 ```
+
+食材のデータを持つファイルは置かない。**アプリは何も覚えない。**
 
 `vault.ts` に対応するテストファイルは置かない。外部 API への通信を含むため、単体テストでは意味のある検証ができない。実測で担保する（Testing Strategy を参照）。
 
@@ -189,63 +194,59 @@ sequenceDiagram
 
 | Requirement | Summary | Components | Interfaces | Flows |
 |-------------|---------|------------|------------|-------|
-| 1.1, 1.2, 1.3, 1.4 | 食材の選択と取り消し | 記録フォーム / プリセット | `FOODS` / フォームの状態 | — |
-| 1.5 | 対象が無いときは送信しない | 記録フォーム | 送信ボタンの無効化 | — |
-| 2.1 | 100g あたりの値を持つ | プリセット | `Food` | — |
-| 2.2 | 既定の量を示す | プリセット / 記録フォーム | `Food.defaultGrams` | — |
-| 2.3 | 量の変更で算出し直す | 栄養価の算出 | `calculateItem` | — |
-| 2.4 | 合計を示す | 栄養価の算出 | `sumNutrition` | — |
-| 2.5, 2.6 | 食材ごとに丸め、合計はその和 | 栄養価の算出 | `calculateItem` / `sumNutrition` | — |
-| 2.7 | 単位を伴わない数値 | ノートの生成 | `buildNote` | — |
-| 2.8 | 不正な量を弾く | 記録の受付 | `recordMeal` の検証 | 記録フロー |
+| 1.1 | 入力する手段を示す | 記録フォーム | フォームの項目 | — |
+| 1.2, 1.3, 1.4 | 対象に加える・複数・取り消す | 記録フォーム | フォームの状態 | — |
+| 1.5 | 名前が空なら加えない | 記録フォーム / 記録の受付 | 入力の検証 | — |
+| 1.6 | 対象が無いときは送信しない | 記録フォーム / 記録の受付 | 送信ボタンの無効化 / `invalid` | 記録フロー |
+| 2.1 | 入力の変更で算出し直す | 栄養価の算出 | `calculateItem` | — |
+| 2.2 | 合計を示す | 栄養価の算出 | `sumNutrition` | — |
+| 2.3, 2.4 | 食材ごとに丸め、合計はその和 | 栄養価の算出 | `calculateItem` / `sumNutrition` | — |
+| 2.5 | 単位を伴わない数値 | ノートの生成 | `buildNote` | — |
+| 2.6 | 不正な数値を弾く | 記録フォーム / 記録の受付 | 入力の検証 | 記録フロー |
 | 3.1 | 現在時刻を既定値にする | 記録フォーム | フォームの初期値 | — |
 | 3.2, 3.3 | 時刻から区分を推定する | 食事区分の推定 | `estimateMealKind` | — |
 | 3.4 | 自ら選んだ区分を保持する | 記録フォーム | フォームの状態 | — |
 | 3.5 | 分の単位まで扱う | ノートの生成 | `buildFileName` | — |
-| 4.1, 4.2 | 未登録食材の手入力 | 記録フォーム / 栄養価の算出 | `Food` を満たす値の組み立て | — |
-| 4.3 | 手入力をプリセットに保存しない | プリセット | 書き込み経路を持たない | — |
-| 4.4 | 名前が空なら加えない | 記録フォーム | 入力の検証 | — |
-| 5.1 | 新規ファイルを 1 つ作る | vault への書き込み | `writeNote` | 記録フロー |
-| 5.2 | ファイル名は時刻から決める | ノートの生成 | `buildFileName` | — |
-| 5.3 | frontmatter に 8 項目 | ノートの生成 | `buildNote` | — |
-| 5.4 | 量つきサマリーを組み立てる | ノートの生成 | `buildNote` | — |
-| 5.5 | 食材名のリストは量を含まない | ノートの生成 | `buildNote` | — |
-| 5.6 | 本文に内訳を書く | ノートの生成 | `buildNote` | — |
-| 5.7 | 料理名は任意 | ノートの生成 | `buildNote` | — |
-| 5.8 | 重複なら記録せず示す | vault への書き込み | `WriteResult` の `duplicate` | 記録フロー |
-| 5.9 | 既存を読まない・統合しない | vault への書き込み | `sha` を送らない | 記録フロー |
-| 6.1 | 送信中の表示と二重送信の防止 | 記録フォーム | `useActionState` の `pending` | — |
-| 6.2 | 成功とファイル名を示す | 記録の受付 / 記録フォーム | `RecordState` | 記録フロー |
-| 6.3 | 失敗の原因を 3 つに分ける | vault への書き込み / 記録の受付 | `WriteResult` / `RecordState` | 記録フロー |
-| 6.4 | 入力を保持する | 記録フォーム | クライアント側の状態 | — |
-| 7.1 | 資格情報をリポジトリに含めない | vault への書き込み | 環境変数 | — |
-| 7.2 | 資格情報を端末に渡さない | 記録の受付 / vault への書き込み | Server Action の境界 | 記録フロー |
-| 7.3 | 未設定なら記録を試みない | vault への書き込み | `loadVaultConfig` が `null` | 記録フロー |
+| 4.1 | 新規ファイルを 1 つ作る | vault への書き込み | `writeNote` | 記録フロー |
+| 4.2 | ファイル名は時刻から決める | ノートの生成 | `buildFileName` | — |
+| 4.3 | frontmatter に 8 項目 | ノートの生成 | `buildNote` | — |
+| 4.4 | 量つきサマリーを組み立てる | ノートの生成 | `buildNote` | — |
+| 4.5 | 食材名のリストは量を含まない | ノートの生成 | `buildNote` | — |
+| 4.6 | 本文に内訳を書く | ノートの生成 | `buildNote` | — |
+| 4.7 | 料理名は任意 | ノートの生成 | `buildNote` | — |
+| 4.8 | 重複なら記録せず示す | vault への書き込み | `WriteResult` の `duplicate` | 記録フロー |
+| 4.9 | 既存を読まない・統合しない | vault への書き込み | `sha` を送らない | 記録フロー |
+| 5.1 | 送信中の表示と二重送信の防止 | 記録フォーム | `useActionState` の `pending` | — |
+| 5.2 | 成功とファイル名を示す | 記録の受付 / 記録フォーム | `RecordState` | 記録フロー |
+| 5.3 | 失敗の原因を 3 つに分ける | vault への書き込み / 記録の受付 | `WriteResult` / `RecordState` | 記録フロー |
+| 5.4 | 入力を保持する | 記録フォーム | クライアント側の状態 | — |
+| 6.1 | 資格情報をリポジトリに含めない | vault への書き込み | 環境変数 | — |
+| 6.2 | 資格情報を端末に渡さない | 記録の受付 / vault への書き込み | Server Action の境界 | 記録フロー |
+| 6.3 | 未設定なら記録を試みない | vault への書き込み | `loadVaultConfig` が `null` | 記録フロー |
 
-38 の受入基準すべてに担当が割り当たっている。
+33 の受入基準すべてに担当が割り当たっている。
 
 ## Components and Interfaces
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| プリセット | データ | 食材の概算値を持つ | 2.1, 2.2, 4.3 | なし | State |
-| 栄養価の算出 | ドメイン | 量から栄養価を出し、丸めて合計する | 2.3〜2.6 | なし | Service |
+| 栄養価の算出 | ドメイン | 入力値から栄養価を出し、丸めて合計する | 2.1〜2.4 | なし | Service |
 | 食事区分の推定 | ドメイン | 時刻から区分を決める | 3.2, 3.3 | なし | Service |
-| ノートの生成 | ドメイン | ファイル名と Markdown を組み立てる | 2.7, 3.5, 5.2〜5.7 | 栄養価の算出 (P0) | Service |
-| vault への書き込み | 外部連携 | vault にファイルを作る | 5.1, 5.8, 5.9, 7.1, 7.3 | GitHub Contents API (P0) | Service |
-| 記録の受付 | ランタイム | 入力を受けて配線する | 2.8, 6.2, 6.3, 7.2 | 上記すべて (P0) | Service |
-| 記録フォーム | UI | 選択・入力・送信 | 1.1〜1.5, 3.1, 3.4, 4.1, 4.2, 4.4, 6.1, 6.4 | プリセット (P0), 記録の受付 (P0) | — |
+| ノートの生成 | ドメイン | ファイル名と Markdown を組み立てる | 2.5, 3.5, 4.2〜4.7 | 栄養価の算出 (P0) | Service |
+| vault への書き込み | 外部連携 | vault にファイルを作る | 4.1, 4.8, 4.9, 6.1, 6.3 | GitHub Contents API (P0) | Service |
+| 記録の受付 | ランタイム | 入力を受けて配線する | 1.5, 1.6, 2.6, 5.2, 5.3, 6.2 | 上記すべて (P0) | Service |
+| 記録フォーム | UI | 入力・取り消し・送信 | 1.1〜1.6, 2.2, 2.6, 3.1, 3.4, 5.1, 5.4 | 記録の受付 (P0), 栄養価の算出 (P0) | — |
 | 記録画面 | UI | フォームを配置する | — | 記録フォーム (P0) | — |
 
 ### 型
 
 ```typescript
-/** プリセットの食材。100g あたりの概算値を持つ。 */
-export type Food = {
+/** 利用者が入力した食材。100g あたりの概算値も量も入力値である。 */
+export type FoodInput = {
   readonly name: string;
   readonly kcalPer100g: number;
   readonly proteinPer100g: number;
-  readonly defaultGrams: number;
+  readonly grams: number;
 };
 
 /** 記録の対象に加えた食材。量が決まり、栄養価は整数に丸められている。 */
@@ -270,50 +271,19 @@ export type MealRecord = {
 
 `MealKind` を文字列リテラルの合併にするのは、vault に書く値がそのまま Obsidian の絞り込みに使われるためである。表記を型で固定する。
 
-### データ層
-
-#### プリセット
-
-| Field | Detail |
-|-------|--------|
-| Intent | 食材の名前と 100g あたりの概算値を定数として持つ |
-| Requirements | 2.1, 2.2, 4.3 |
-
-**Responsibilities & Constraints**
-
-- 定数のみを持つ。関数を持たない
-- 書き込み経路を持たない。手入力した食材がここに追加されることはない（4.3）
-- `presets.md` を読まない。読み取り経路を作らない（`tech.md`）
-
-**Contracts**: State [x]
-
-##### State Management
-
-```typescript
-export const FOODS: readonly Food[];
-```
-
-- **Invariants**: `name` は一意。`kcalPer100g` / `proteinPer100g` / `defaultGrams` はいずれも 0 以上
-
-**Implementation Notes**
-
-- Integration: サーバー側とクライアント側の両方から import する。定数のため境界をまたいでも問題にならない
-- Validation: 初期に入れる食材の件数と中身は実装時に利用者へ確認する。設計では件数を定めない
-- Risks: 増やすにはデプロイが必要。よく食べるものが入っていないと手入力が増え、継続を妨げる
-
 ### ドメイン層
 
 #### 栄養価の算出
 
 | Field | Detail |
 |-------|--------|
-| Intent | 100g あたりの値と量から栄養価を出し、整数に丸めて合計する |
-| Requirements | 2.3, 2.4, 2.5, 2.6 |
+| Intent | 入力された 100g あたりの値と量から栄養価を出し、整数に丸めて合計する |
+| Requirements | 2.1, 2.2, 2.3, 2.4 |
 
 **Responsibilities & Constraints**
 
 - HTTP も `FormData` も参照しない。値を受けて値を返す
-- **丸めは食材ごとに行う。** 合計は丸めた値の和とする（2.5, 2.6）
+- **丸めは食材ごとに行う。** 合計は丸めた値の和とする（2.3, 2.4）
 - 丸めは四捨五入とする
 
 **Dependencies**
@@ -325,8 +295,8 @@ export const FOODS: readonly Food[];
 ##### Service Interface
 
 ```typescript
-/** 100g あたりの値と量から、整数に丸めた栄養価を出す。 */
-export function calculateItem(food: Food, grams: number): MealItem;
+/** 入力された 100g あたりの値と量から、整数に丸めた栄養価を出す。 */
+export function calculateItem(input: FoodInput): MealItem;
 
 /** 丸めた食材ごとの値を合計する。 */
 export function sumNutrition(items: readonly MealItem[]): {
@@ -335,7 +305,7 @@ export function sumNutrition(items: readonly MealItem[]): {
 };
 ```
 
-- **Preconditions**: `grams` は 0 以上の有限な数
+- **Preconditions**: `input.grams` / `kcalPer100g` / `proteinPer100g` はいずれも 0 以上の有限な数
 - **Postconditions**: `calculateItem` が返す `kcal` と `protein` は整数。`sumNutrition` の結果は引数の各値の和に等しい
 - **Invariants**: 同じ入力に対して常に同じ結果を返す
 
@@ -390,13 +360,13 @@ export function estimateMealKind(eatenAt: Date): MealKind;
 | Field | Detail |
 |-------|--------|
 | Intent | 記録からファイル名と Markdown を組み立てる |
-| Requirements | 2.7, 3.5, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7 |
+| Requirements | 2.5, 3.5, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7 |
 
 **Responsibilities & Constraints**
 
 - 文字列を組み立てるだけ。書き込みは行わない
 - frontmatter の 8 項目をすべて出力する。料理名が無い場合の扱いは下記 Postconditions に定める
-- 数値に単位を付けない（2.7）
+- 数値に単位を付けない（2.5）
 
 **Dependencies**
 
@@ -417,12 +387,12 @@ export function buildNote(record: MealRecord): string;
 
 - **Preconditions**: `record.items` は 1 件以上
 - **Postconditions**:
-  - `buildFileName` は `YYYY-MM-DD-HHmm.md` の形式を返す（5.2, 3.5）
+  - `buildFileName` は `YYYY-MM-DD-HHmm.md` の形式を返す（4.2, 3.5）
   - `buildNote` の frontmatter は `date` / `time` / `meal` / `menu` / `kcal` / `protein` / `foods` / `dish` を持つ
-  - `menu` は `白米300g / 鶏もも400g` のように食材名と量を並べた文字列（5.4）
-  - `foods` は量を含まない名前の配列（5.5）
-  - 本文は食材ごとに `- 白米 300g — 468 / P8` の形で並べる（5.6）
-  - 料理名が無い場合、`dish` の値を空にして行は出力する（5.7）
+  - `menu` は `白米300g / 鶏もも400g` のように食材名と量を並べた文字列（4.4）
+  - `foods` は量を含まない名前の配列（4.5）
+  - 本文は食材ごとに `- 白米 300g — 468 / P8` の形で並べる（4.6）
+  - 料理名が無い場合、`dish` の値を空にして行は出力する（4.7）
 - **Invariants**: frontmatter は常に 8 項目をすべて持つ。本文に並べた数値の和が frontmatter の `kcal` / `protein` に等しい
 
 **Implementation Notes**
@@ -438,11 +408,11 @@ export function buildNote(record: MealRecord): string;
 | Field | Detail |
 |-------|--------|
 | Intent | vault にファイルを新規作成し、結果を分類して返す |
-| Requirements | 5.1, 5.8, 5.9, 7.1, 7.3 |
+| Requirements | 4.1, 4.8, 4.9, 6.1, 6.3 |
 
 **Responsibilities & Constraints**
 
-- **`sha` を送らない。** 既存ファイルの取得も行わない（5.9）
+- **`sha` を送らない。** 既存ファイルの取得も行わない（4.9）
 - 例外を投げない。失敗は戻り値で表す
 - 資格情報を戻り値に含めない。ログにも出さない
 
@@ -468,7 +438,7 @@ export function loadVaultConfig(
   env: Record<string, string | undefined>,
 ): VaultConfig | null;
 
-/** 書き込みの結果。失敗の理由は受入基準 6.3 の 3 分類に対応する。 */
+/** 書き込みの結果。失敗の理由は受入基準 5.3 の 3 分類に対応する。 */
 export type WriteResult =
   | { readonly ok: true; readonly fileName: string }
   | { readonly ok: false; readonly reason: "duplicate" | "permission" | "network" };
@@ -484,7 +454,7 @@ export function writeNote(
 - **Preconditions**: `config` は `loadVaultConfig` が `null` 以外を返した値
 - **Postconditions**:
   - 作成に成功した場合のみ `ok: true` を返す
-  - 同じ名前のファイルが既にある場合は `reason: "duplicate"` を返す（5.8）
+  - 同じ名前のファイルが既にある場合は `reason: "duplicate"` を返す（4.8）
   - 資格情報が受け付けられない場合は `reason: "permission"` を返す
   - 通信に失敗した場合は `reason: "network"` を返す
 - **Invariants**: 戻り値に資格情報を含めない。例外を投げない
@@ -523,12 +493,12 @@ export function writeNote(
 | Field | Detail |
 |-------|--------|
 | Intent | フォームの入力を受け、生成と書き込みへ配線する |
-| Requirements | 2.8, 6.2, 6.3, 7.2 |
+| Requirements | 1.5, 1.6, 2.6, 5.2, 5.3, 6.2 |
 
 **Responsibilities & Constraints**
 
 - 判断を持たない。検証・生成・書き込みはそれぞれの層に委ねる
-- **資格情報をこの関数の中でのみ読む。** 戻り値に含めない（7.2）
+- **資格情報をこの関数の中でのみ読む。** 戻り値に含めない（6.2）
 - **多層防御として認証を検証する。** 遮断点を通っているはずの要求でも、届いた `Authorization` ヘッダを `basic-auth` に渡して確かめる
 - 例外を投げない。失敗は戻り値で表す
 
@@ -569,16 +539,16 @@ export function recordMeal(
 - **Postconditions**:
   - 認証情報が設定されているのに要求の `Authorization` が検証を通らない場合は、
     何も行わず `reason: "unauthorized"` を返す
-  - 入力が不正な場合は書き込みを試みず `reason: "invalid"` を返す（2.8, 1.5）
-  - 資格情報が未設定の場合は書き込みを試みず `reason: "config"` を返す（7.3）
-  - 書き込みの結果をそのまま `duplicate` / `permission` / `network` に対応させる（6.3）
-  - 成功した場合はファイル名を返す（6.2）
+  - 入力が不正な場合は書き込みを試みず `reason: "invalid"` を返す（1.5, 1.6, 2.6）
+  - 資格情報が未設定の場合は書き込みを試みず `reason: "config"` を返す（6.3）
+  - 書き込みの結果をそのまま `duplicate` / `permission` / `network` に対応させる（5.3）
+  - 成功した場合はファイル名を返す（5.2）
 - **Invariants**: 戻り値に資格情報を含めない
 
 **Implementation Notes**
 
 - Integration: `useActionState` の署名に合わせ、第 1 引数に直前の state、第 2 引数に `FormData` を取る
-- Validation: 入力の検証はこの層で行う。食材が 0 件、量が数値でない、食材名が空のいずれかで `invalid` を返す
+- Validation: 入力の検証はこの層で行う。食材が 0 件、数値として解釈できない値、食材名が空のいずれかで `invalid` を返す
 - **認証の再検証**: `app-foundation` の申し送りに従い、この関数の内部でも認証を検証する。`next/headers` の `headers()` から `Authorization` を取り、`basic-auth` の `verifyCredentials` に渡す。認証情報が未設定のとき（手元の開発）は検証を省く。遮断点と同じ判定を 2 箇所で行うが、**守っているのはページの閲覧ではなく vault への書き込み権限**であり、遮断点が外れたときの被害が重い
 - Risks: 認証の判定が 2 箇所に散る。`basic-auth` の契約が変わると両方の修正が必要になる。これは `app-foundation` の Revalidation Triggers に該当する
 
@@ -588,28 +558,29 @@ export function recordMeal(
 
 | Field | Detail |
 |-------|--------|
-| Intent | 食材の選択・量の調整・時刻と区分の指定・送信を受け持つ |
-| Requirements | 1.1〜1.5, 3.1, 3.4, 4.1, 4.2, 4.4, 6.1, 6.4 |
+| Intent | 食材の入力・取り消し・時刻と区分の指定・送信を受け持つ |
+| Requirements | 1.1〜1.6, 2.2, 2.6, 3.1, 3.4, 5.1, 5.4 |
 
 **Responsibilities & Constraints**
 
 - クライアントコンポーネント（`"use client"`）。状態を持つ
 - 食事区分について、**利用者が自ら選んだかどうかを状態として覚える**。選ばれていれば時刻の変更で上書きしない（3.4）
-- 送信中は `pending` で送信ボタンを無効にする（6.1）
-- 失敗しても入力の状態を破棄しない（6.4）
+- 送信中は `pending` で送信ボタンを無効にする（5.1）
+- 失敗しても入力の状態を破棄しない（5.4）
 
 **Dependencies**
 
 - Inbound: 記録画面（P0）
-- Outbound: プリセット — 一覧の描画（P0）、記録の受付 — 送信（P0）、栄養価の算出 — 合計の表示（P0）
+- Outbound: 記録の受付 — 送信（P0）、栄養価の算出 — 合計の表示（P0）
 
 **Contracts**: なし（状態は内部に閉じる）
 
 **Implementation Notes**
 
 - Integration: `useActionState(recordMeal, { status: "idle" })` で `[state, formAction, pending]` を得る
-- Validation: 食材が 0 件のとき、量が不正なとき、手入力の名前が空のときは送信ボタンを押せない状態にする。サーバー側の検証と二重になるが、**画面側で弾くほうが利用者に早く伝わる**
+- Validation: 食材が 0 件のとき、数値が不正なとき、名前が空のときは送信ボタンを押せない状態にする。サーバー側の検証と二重になるが、**画面側で弾くほうが利用者に早く伝わる**
 - Risks: 合計の表示に `sumNutrition` を使うため、クライアント側に算出ロジックが読み込まれる。資格情報ではないため問題にならない
+- Risks: 1 食材につき 4 項目（名前・100g あたり 2 値・量）を打つ。**3 品で 12 項目**になる。初期リリースの最大の弱点であり、栄養価の推定を次の spec で入れる動機になる
 
 #### 記録画面
 
@@ -624,15 +595,15 @@ export function recordMeal(
 
 ### Domain Model
 
-- **`Food`**（値オブジェクト）— プリセットの 1 件。100g あたりの概算値と既定の量を持つ。不変
+- **`FoodInput`**（値オブジェクト）— 利用者が入力した食材 1 件。名前・100g あたりの概算値・量を持つ。不変。**どこにも保存されない**
 - **`MealItem`**（値オブジェクト）— 量が決まった食材。栄養価は整数に丸められている。不変
 - **`MealRecord`**（集約）— 記録 1 件。時刻・区分・料理名・食材の集まりを持つ。**ファイル名はこの集約から導かれる**
 
 **不変条件**:
 
-- `MealRecord.items` は 1 件以上（1.5）
-- `MealItem.kcal` / `protein` は整数（2.5）
-- `MealRecord` から導いた本文の数値の和が frontmatter の合計に等しい（2.6）
+- `MealRecord.items` は 1 件以上（1.6）
+- `MealItem.kcal` / `protein` は整数（2.3）
+- `MealRecord` から導いた本文の数値の和が frontmatter の合計に等しい（2.4）
 
 ### Data Contracts & Integration
 
@@ -677,7 +648,7 @@ foods: [白米, 鶏もも]
 
 **認証エラー（何も行わない）**: 認証情報が設定されているのに `Authorization` が検証を通らない → `reason: "unauthorized"`。通常は遮断点が先に 401 を返すため利用者が目にすることはない。**これが表に出た場合は遮断点の適用範囲が壊れている兆候**である
 
-**入力エラー（記録を試みない）**: 食材が 0 件 / 量が数値でない / 手入力の名前が空 → `reason: "invalid"`。画面側でも送信ボタンを無効にして事前に防ぐ
+**入力エラー（記録を試みない）**: 食材が 0 件 / 数値として解釈できない値 / 名前が空 → `reason: "invalid"`。画面側でも送信ボタンを無効にして事前に防ぐ
 
 **設定エラー（記録を試みない）**: 環境変数が未設定 → `reason: "config"`。不足している変数名を示し、値は示さない
 
@@ -697,14 +668,14 @@ foods: [白米, 鶏もも]
 
 純粋関数を対象とする。外部との通信を含む `vault` は対象にしない。
 
-1. `calculateItem` が 100g あたりの値と量から整数の栄養価を返す（2.3, 2.5）
-2. `sumNutrition` の結果が、丸めた食材ごとの値の和に等しい（2.4, 2.6）
+1. `calculateItem` が入力された 100g あたりの値と量から整数の栄養価を返す（2.1, 2.3）
+2. `sumNutrition` の結果が、丸めた食材ごとの値の和に等しい（2.2, 2.4）
 3. `estimateMealKind` が時間帯の各境界で正しい区分を返す（3.2）
 4. `estimateMealKind` が 16 時台で「間食」を返す（3.2）
-5. `buildFileName` が `YYYY-MM-DD-HHmm.md` を返す（5.2, 3.5）
-6. `buildNote` の frontmatter が 8 項目を持ち、`menu` に量が入り `foods` に量が入らない（5.3, 5.4, 5.5）
-7. `buildNote` の本文に並べた数値の和が frontmatter の合計に等しい（5.6, 2.6）
-8. `buildNote` が料理名の無い記録で `dish` を空の値で出力し、8 項目を保つ（5.7）
+5. `buildFileName` が `YYYY-MM-DD-HHmm.md` を返す（4.2, 3.5）
+6. `buildNote` の frontmatter が 8 項目を持ち、`menu` に量が入り `foods` に量が入らない（4.3, 4.4, 4.5）
+7. `buildNote` の本文に並べた数値の和が frontmatter の合計に等しい（4.6, 2.4）
+8. `buildNote` が料理名の無い記録で `dish` を空の値で出力し、8 項目を保つ（4.7）
 
 ### 外部 API の検証は実測で行う
 
@@ -716,20 +687,20 @@ foods: [白米, 鶏もも]
 
 実装完了時に次を確認する。
 
-9. 認証情報を設定した状態で記録画面を開き、食材を選んで送信すると vault にファイルが作られる（5.1）
-10. 作られたファイルの frontmatter が 8 項目を持ち、Obsidian の Bases で一覧に出る（5.3）
-11. 同じ時刻で 2 回送信すると、2 回目は重複として示される（5.8）
-12. 環境変数を外して送信すると、記録を試みずに設定の不足が示される（7.3）
-13. 失敗したあとも入力した食材と量が残っている（6.4）
-14. 送信中は送信ボタンが押せない（6.1）
-15. プリセットに無い食材を手で入力して記録できる（4.1, 4.2）
+9. 認証情報を設定した状態で記録画面を開き、食材を入力して送信すると vault にファイルが作られる（4.1）
+10. 作られたファイルの frontmatter が 8 項目を持ち、Obsidian の Bases で一覧に出る（4.3）
+11. 同じ時刻で 2 回送信すると、2 回目は重複として示される（4.8）
+12. 環境変数を外して送信すると、記録を試みずに設定の不足が示される（6.3）
+13. 失敗したあとも入力した食材と量が残っている（5.4）
+14. 送信中は送信ボタンが押せない（5.1）
+15. 食材を 3 件入力して記録でき、合計が各食材の値の和になっている（1.3, 2.2）
 16. 時刻を変えると食事区分が追従し、区分を自ら選んだあとは追従しない（3.3, 3.4）
 17. 認証情報を設定した状態で、`Authorization` を伴わない POST を記録の受付へ直接送ると記録されない（多層防御の確認）
 
 ## Security Considerations
 
-- **資格情報の保管**: `VAULT_TOKEN` を環境変数に置く。`.env.local` は `.gitignore` の `.env*` により追跡されない。`.env.local.example` には変数名と用途のみを記す（7.1）
-- **資格情報の境界**: Server Action の中でのみ読む。戻り値に含めず、クライアントコンポーネントへ渡さない（7.2）
+- **資格情報の保管**: `VAULT_TOKEN` を環境変数に置く。`.env.local` は `.gitignore` の `.env*` により追跡されない。`.env.local.example` には変数名と用途のみを記す（6.1）
+- **資格情報の境界**: Server Action の中でのみ読む。戻り値に含めず、クライアントコンポーネントへ渡さない（6.2）
 - **最小権限**: vault への `Contents: Read and write` のみを持つ fine-grained PAT を使う。読み取り経路を作らないため、実際に使うのは書き込みだけである
 - **ログ**: 失敗時に API の応答をそのままログに出さない。トークンがヘッダに含まれるため
 - **多層防御**: 公開 URL の保護は `app-foundation` の遮断点が担う。加えて**記録の受付の内部でも認証を検証する**。`app-foundation` の申し送りのとおり、Server Action は独立したルートではなく記録画面への POST として扱われるため、`matcher` の変更で保護が静かに外れうる。守っているのはページの閲覧ではなく vault への書き込み権限であり、1 層に依存させない
@@ -764,8 +735,19 @@ foods: [白米, 鶏もも]
 | 料理名が空のときの書き方 | **値を空にして行は出す**。frontmatter が常に 8 項目揃うため、Obsidian 側で「プロパティが無いノート」を考慮しなくて済む |
 | Server Action 内での認証の再検証 | **行う**。守っているのが vault への書き込み権限であり、遮断点が外れたときの被害が重い |
 
+さらに、設計を書いたあとに**スコープ自体の変更**があった。
+
+| 変更 | 理由 |
+|---|---|
+| プリセットを本 spec から外した | 食材のデータを貯める仕組みを持たず、毎回入力する。**何を貯めるべきかは手入力の記録が溜まってから決める**ほうが確かだという判断 |
+| 栄養価の推定（AI）を次の spec にした | 入力の手間はこれで解消する見込みだが、外部 API が 2 つになり失敗の組み合わせが増える。**手入力版を一度使ってから、食材名だけで足りるのか・調理法も要るのかを見極める** |
+
 ### 残るリスク
 
 - **トークンの期限切れ** — fine-grained PAT は期限付き。失効すると記録できなくなる。受入基準 6.3 の「権限」として示し、何をすればよいか分かるようにする
-- **プリセットが育たない** — 手入力した食材は保存されないため、よく食べるものを毎回打つことになる。登録機能の spec を早めに切る動機になる
+- **入力の手間** — 1 食材につき 4 項目（名前・100g あたり 2 値・量）を打つ。3 品なら 12 項目になる。
+  **これが初期リリースの最大の弱点である。** 面倒で記録しなくなれば「精度より継続」という方針が
+  崩れる。栄養価の推定を次の spec で早めに入れる動機になる
+- **100g あたりの値を調べる手間** — 利用者が毎回どこかから調べる。概算で構わないという方針
+  （`product.md`）に救われるが、調べる行為そのものが摩擦になる
 - **422 の意味が将来変わる** — GitHub が検証の分類を変えた場合、重複以外の 422 を重複と誤判定する。Revalidation Triggers に「外部 API の応答の分類が変わったとき」を含める
