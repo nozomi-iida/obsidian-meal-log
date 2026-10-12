@@ -87,7 +87,7 @@
 
 - [ ] 3. 配線
 
-- [ ] 3.1 推定の受付を実装する
+- [x] 3.1 推定の受付を実装する
   - `src/app/actions.ts` に `estimateFoods` を加える
   - 処理の順序は **入力の検証 → 認証の再検証 → 資格情報 → 推定**。`recordMeal` と同じ順序にする
   - **`basic-auth` の検証を推定の前に置く。** `app-foundation` の design.md が
@@ -248,8 +248,44 @@
 - **負の値と YAML の引用**（6.1）— 横断検証で見つかった。要件の文面に忠実な実装が意図から外れた例
 - **`.env*` は Read / Write / Edit から触れない**（2.1）— `git diff` をファイル名なしで使う
 
+## meal-record への申し送り（別タスクの候補）
+
+3.1 の実装とレビューの過程で、`meal-record` の既存の抜けが 1 件見つかった。
+**本 spec の境界の外なので触っていない。**
+
+- **`recordMeal` が vault の失敗分類をそのまま返す経路がテストで覆われていない。**
+  `src/app/actions.ts` の `reason: result.reason` を `"network"` に固定しても、
+  テストが 87 件すべて通る（実装者とレビュアーが独立に確認）。
+  **壊れると vault の重複・権限・通信のすべてが「通信エラー、時間を置いてやり直す」と
+  表示され、利用者は直らない失敗を再送し続ける。** `meal-record` が GitHub API を実測して
+  「重複は 422（409 ではない）」を確定させた労力が、1 行の変更で無効化されうる。
+  描画側（`record-form.tsx` の文面と `record-form.test.tsx` の検査）は覆われており、
+  抜けているのは受付の 1 行の受け渡しだけである。
+  `writeNote` が `duplicate` / `permission` を返したときの分類を押さえるテストを 2 件足す
+- **`unauthorized` 分岐のテストを書く手段が判明した。** `vi.mock("next/headers", ...)` を
+  `importOriginal` 併用の部分モックにし、**既定の実装を本物のまま残す**。これにより
+  既存の「要求の外では例外になる」ことに依存したテストが壊れない。`afterEach` の
+  `mockReset()` が必須である（削除すると shuffle の seed によって落ちる）。
+  3.1 の `estimateFoods` でこの形を使っており、`recordMeal` にも同じ形で書ける
+
 ## Implementation Notes
 
+- **3.1**: 処理の順序は **入力の検証 → 認証の再検証 → 資格情報 → 推定**。
+  **認証より先に資格情報を見てはいけない。** 未認証の相手に「このサーバーは
+  `ANTHROPIC_API_KEY` が設定されていない」という配置環境の情報を教えることになる。
+  順序を入れ替えると落ちるテストを置いてある
+- **3.1**: `recordMeal` の「認証 → 資格情報」の順序は、既存のテストが
+  **偶発的に固定している**（`rejects.toThrow("outside a request scope")` が
+  `headers()` への到達を主張するため、認証を後ろへ動かすと例外が出ずに落ちる）。
+  意図して書かれたテストではないので、既存テストの書き換えで静かに失われうる
+- **3.1**: `page.tsx` の `maxDuration` は **1.2 の実測で見直す**。現在は
+  `estimate.ts` の `AbortSignal.timeout`（30 秒）の 2 倍という根拠で 60 秒。
+  **`page.tsx` のコメントが `estimate.ts` の値を参照しているため、
+  片方だけ変えると記述が静かに古くなる。** 1.2 では両方を揃えて見直すこと
+- **3.1**: `parseFoodNames` と `parseFoodInputs` で名前の読み方（`trim()` → 空なら不正）が
+  重複している。現在はバイト単位で一致。ずれると**推定では通る名前が記録で弾かれ、
+  理由の分からない入力不正になる**。3 行・同一ファイル・隣接なので今は抽出しない。
+  `name` の読み手が 3 つ目になった時点で `src/lib/` へ切り出す
 - **4.1**: 「記録する」の無効化は 4 条件（`pending` / `entries.length === 0` /
   `eatenAt === ""` / `hasMissingValue`）だが、**4.1 の時点で突然変異テストが検知できるのは
   `hasMissingValue` と `entries.length === 0` の 2 条件だけである**。`per100g` を埋める経路が

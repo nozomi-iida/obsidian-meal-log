@@ -2,9 +2,15 @@
 
 import { headers } from "next/headers";
 import { loadCredentials, verifyCredentials } from "@/lib/basic-auth";
+import {
+  type EstimateFailure,
+  estimate,
+  loadEstimateConfig,
+} from "@/lib/estimate";
 import { buildFileName, buildNote } from "@/lib/note";
 import { calculateItem } from "@/lib/nutrition";
 import type {
+  FoodEstimate,
   FoodInput,
   LocalDateTime,
   MealKind,
@@ -28,6 +34,21 @@ export type RecordState =
     };
 
 /**
+ * 推定の結果。記録フォームがこれを表示に使う。
+ *
+ * `EstimateFailure`（`network` / `credential` / `malformed`）は推定そのものが
+ * 成立しなかった理由で、`src/lib/estimate.ts` から来る。受付が足すのは
+ * そこに届く前に止まった 3 つだけである。
+ */
+export type EstimateState =
+  | { readonly status: "idle" }
+  | { readonly status: "success"; readonly estimates: readonly FoodEstimate[] }
+  | {
+      readonly status: "error";
+      readonly reason: "invalid" | "unauthorized" | "config" | EstimateFailure;
+    };
+
+/**
  * 受け付ける食事区分。
  *
  * 送信された値が `MealKind` のいずれかであることを実行時に確かめるために持つ。
@@ -39,6 +60,8 @@ const MEAL_KINDS: readonly MealKind[] = ["朝", "昼", "夜", "間食", "寝る�
 const EATEN_AT_PATTERN = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
 
 const INVALID: RecordState = { status: "error", reason: "invalid" };
+
+const INVALID_ESTIMATE: EstimateState = { status: "error", reason: "invalid" };
 
 /**
  * 送信された値を数値として読む。読めなければ、または負なら null。
@@ -107,6 +130,34 @@ function parseFoodInputs(formData: FormData): readonly FoodInput[] | null {
     inputs.push({ name, kcalPer100g, proteinPer100g, grams });
   }
   return inputs;
+}
+
+/**
+ * 送信された食材名を読む。1 件も無ければ、または 1 件でも空なら null。
+ *
+ * 繰り返し項目は食材名だけである。推定は 100g あたりの値を返すため量を
+ * 必要とせず、長さを突き合わせる相手もない。
+ */
+function parseFoodNames(formData: FormData): readonly string[] | null {
+  const rawNames = formData.getAll("name");
+  if (rawNames.length === 0) {
+    return null;
+  }
+
+  const names: string[] = [];
+  for (const rawName of rawNames) {
+    if (typeof rawName !== "string") {
+      return null;
+    }
+    // 前後の空白だけの名前は空として扱う。空の名前を推定に送っても値は返らず、
+    // 利用者には理由の分からない「推定できなかった」が返るだけになる。
+    const name = rawName.trim();
+    if (name === "") {
+      return null;
+    }
+    names.push(name);
+  }
+  return names;
 }
 
 /**
@@ -223,4 +274,47 @@ export async function recordMeal(
     return { status: "error", reason: result.reason };
   }
   return { status: "success", fileName: result.fileName };
+}
+
+/**
+ * 食材名を受けて 100g あたりの値を推定する。`useActionState` から呼ばれる。
+ *
+ * 処理の順序は `recordMeal` と同じく **入力の検証 → 認証の再検証 → 資格情報
+ * → 推定** である。認証の検証も推定も外部に触れるため、弾ける入力はその前に
+ * 弾く。入力の検証を `headers()` より前に置くことで、検証そのものをテストから
+ * 確かめられる状態も保たれる。
+ *
+ * 例外は投げない。失敗は戻り値で表す。資格情報は戻り値に含めず、ログにも
+ * 出さない。`reason: "config"` のときも不足しうる変数名を載せない。変数名は
+ * 画面が静的な文面として示す（受入基準 6.4）。
+ *
+ * @param _previous 直前の結果。`useActionState` の署名に合わせて受け取るが、
+ *   1 回の推定の結果は前回に依存しないため使わない
+ */
+export async function estimateFoods(
+  _previous: EstimateState,
+  formData: FormData,
+): Promise<EstimateState> {
+  const names = parseFoodNames(formData);
+  if (!names) {
+    return INVALID_ESTIMATE;
+  }
+
+  if (!(await isAuthorized())) {
+    // 何も行わない。これが表に出た場合は遮断点の適用範囲が壊れている兆候である。
+    return { status: "error", reason: "unauthorized" };
+  }
+
+  // 要求ごとに読み出す。無ければ推定を試みない（受入基準 6.5）。キーなしで
+  // 要求を組み立てると、設定の不足が資格情報のエラーに化けて原因が分からなくなる。
+  const config = loadEstimateConfig(process.env);
+  if (!config) {
+    return { status: "error", reason: "config" };
+  }
+
+  const result = await estimate(config, names);
+  if (!result.ok) {
+    return { status: "error", reason: result.reason };
+  }
+  return { status: "success", estimates: result.estimates };
 }
