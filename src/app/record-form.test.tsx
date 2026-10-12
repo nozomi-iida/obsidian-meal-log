@@ -129,7 +129,7 @@ describe("RecordForm", () => {
 
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "カロリー・タンパク質・量は数値で入力してください。",
+      "カロリー・タンパク質・量は 0 以上の数値で入力してください。",
     );
   });
 
@@ -362,5 +362,92 @@ describe("RecordForm", () => {
       expect(status).toHaveTextContent("VAULT_REPO");
       expect(status).toHaveTextContent("VAULT_TOKEN");
     });
+  });
+  it("負の数値では加えられず、0 以上であることを示す", () => {
+    // 量が負だと負のカロリーが vault に書かれる。画面側で弾いて早く伝える。
+    const negatives = [
+      { name: "鶏むね", kcal: "165", protein: "23", grams: "-100" },
+      { name: "鶏むね", kcal: "-165", protein: "23", grams: "100" },
+      { name: "鶏むね", kcal: "165", protein: "-23", grams: "100" },
+    ];
+
+    for (const food of negatives) {
+      const { unmount } = render(<RecordForm />);
+
+      addFood(food);
+
+      expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+      expect(screen.getByRole("alert")).toHaveTextContent("0 以上");
+      unmount();
+    }
+  });
+
+  it("0 は加えられる。条件は 0 以上であり、0 より大きいではない", () => {
+    render(<RecordForm />);
+
+    addFood({ name: "水", kcal: "0", protein: "0", grams: "100" });
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("水 100g")).toBeInTheDocument();
+  });
+
+  it("数値の欄は 0 未満を入力できない状態にする", () => {
+    render(<RecordForm />);
+
+    // ブラウザ側の 1 層目。回避された送信は受付が弾く。
+    const labels = [
+      "100g あたりのカロリー",
+      "100g あたりのタンパク質",
+      "食べた量（g）",
+    ];
+    for (const label of labels) {
+      expect(screen.getByLabelText(label)).toHaveAttribute("min", "0");
+    }
+  });
+
+  it("記録が成功すると入力が初期状態に戻り、結果の表示だけが残る", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 11, 16, 30) });
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "success",
+      fileName: "2026-10-11-1900.md",
+    });
+    const { container } = render(<RecordForm />);
+
+    changeEatenAt("2026-10-11T19:00");
+    chooseKind("寝る前");
+    changeDish("鍋");
+    addFood({ name: "鶏もも", kcal: "200", protein: "17", grams: "400" });
+    fillDraft({ name: "ごはん", kcal: "156" });
+    // 下書きの指摘が出ている状態から送る。成功後まで残すと、何も入力して
+    // いない欄に対する指摘が居座る。
+    addFood({ kcal: "100" });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // 送信の直前に時計を進める。時刻が「画面を開いたときの値のまま」ではなく
+    // 「現在時刻に戻る」ことを区別するためで、1 桁の月日時分で 0 埋めも押さえる。
+    vi.setSystemTime(new Date(2026, 0, 5, 9, 5));
+    fireEvent.click(submitButton(container));
+
+    // 入力が戻るのは結果の表示より 1 描画あと（効果が走ってから）になる。
+    // 結果の表示を待っただけでは、戻る前の状態を見てしまうことがある。
+    await waitFor(() =>
+      expect(screen.queryAllByRole("listitem")).toHaveLength(0),
+    );
+
+    expect(screen.getByLabelText("料理名（任意）")).toHaveValue("");
+    expect(screen.getByLabelText("食べた時刻")).toHaveValue("2026-01-05T09:05");
+    // 区分は戻した時刻から推定し直す（9:05 なら朝）
+    expect(screen.getByLabelText("食事区分")).toHaveValue("朝");
+    // 下書きも、下書きに対する指摘も空に戻す
+    expect(screen.getByLabelText("食材名")).toHaveValue("");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // 結果は残す。受入基準 5.2 が作成したファイル名を示すことを求めている
+    expect(screen.getByRole("status")).toHaveTextContent("記録しました");
+    expect(screen.getByRole("status")).toHaveTextContent("2026-10-11-1900.md");
+
+    // 利用者が選んだ区分の指定も解除する。解除しないと、次の記録では
+    // 時刻を変えても前回選んだ区分が残り続ける（受入基準 3.3 が効かない）
+    changeEatenAt("2026-01-05T19:00");
+    expect(screen.getByLabelText("食事区分")).toHaveValue("夜");
   });
 });

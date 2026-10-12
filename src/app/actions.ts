@@ -41,10 +41,14 @@ const EATEN_AT_PATTERN = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
 const INVALID: RecordState = { status: "error", reason: "invalid" };
 
 /**
- * 送信された値を数値として読む。読めなければ null。
+ * 送信された値を数値として読む。読めなければ、または負なら null。
  *
  * 空文字を先に弾く。`Number("")` は 0 になるため、素のまま変換すると
  * 未入力の欄が 0 として記録されてしまう。
+ *
+ * 負の値も弾く。栄養価の算出は 0 以上の値を前提にしており、量や 100g あたりの
+ * 値が負だと負のカロリーが vault に書かれる。画面側でも弾くが、ブラウザの
+ * 検証を回避した送信を止められるのはここだけである（多層防御）。
  */
 function parseNumber(value: FormDataEntryValue | undefined): number | null {
   if (typeof value !== "string") {
@@ -55,7 +59,7 @@ function parseNumber(value: FormDataEntryValue | undefined): number | null {
     return null;
   }
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 /**

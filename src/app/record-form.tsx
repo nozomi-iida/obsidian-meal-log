@@ -90,10 +90,14 @@ const ERROR_MESSAGES: Record<ErrorReason, string> = {
 };
 
 /**
- * 入力された文字列を数値として読む。読めなければ null。
+ * 入力された文字列を数値として読む。読めなければ、または負なら null。
  *
  * 空文字を先に弾く。`Number("")` は 0 になるため、素のまま変換すると
  * 未入力の欄が 0 として記録の対象に入ってしまう。
+ *
+ * 負の値も弾く。栄養価の算出は 0 以上の値を前提にしており、量や 100g あたりの
+ * 値が負だと負のカロリーになる。`min="0"` と二重になるが、入力欄の属性は
+ * ブラウザの検証を回避した送信を止められない。
  */
 function parseNumber(value: string): number | null {
   const trimmed = value.trim();
@@ -101,7 +105,7 @@ function parseNumber(value: string): number | null {
     return null;
   }
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 /**
@@ -121,7 +125,7 @@ function readDraft(draft: Draft): DraftResult {
   if (kcalPer100g === null || proteinPer100g === null || grams === null) {
     return {
       ok: false,
-      message: "カロリー・タンパク質・量は数値で入力してください。",
+      message: "カロリー・タンパク質・量は 0 以上の数値で入力してください。",
     };
   }
   return { ok: true, food: { name, kcalPer100g, proteinPer100g, grams } };
@@ -175,6 +179,7 @@ export function RecordForm() {
   const [foods, setFoods] = useState<readonly Food[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [dish, setDish] = useState("");
   const [eatenAt, setEatenAt] = useState("");
   const [kind, setKind] = useState<MealKind>(INITIAL_KIND);
   // 利用者が食事区分を自ら選んだかどうか。選ばれたあとは時刻の変更で上書きしない
@@ -198,6 +203,27 @@ export function RecordForm() {
     setEatenAt(formatLocalDateTime(now));
     setKind(estimateMealKind(now));
   }, []);
+
+  // 記録に成功したら入力を初期状態に戻し、次の 1 食をすぐ記録できる状態にする。
+  // 戻さないと、1 食ごとに食材 3〜4 件・時刻・区分・料理名を手で消す手数が
+  // 上乗せされる。結果の表示は残す（受入基準 5.2 が作成したファイル名を
+  // 示すことを求めている）。失敗したときは何もしない。入力を保持して
+  // やり直せる状態を保つ（受入基準 5.4）。
+  useEffect(() => {
+    if (submitResult.status !== "success") {
+      return;
+    }
+    // 時刻は現在時刻に戻し、区分はその時刻から推定し直す。利用者が自ら選んだ
+    // 指定も解除するのは、前の記録の指定を次の記録に持ち越さないためである。
+    const now = new Date();
+    setFoods([]);
+    setDraft(EMPTY_DRAFT);
+    setDraftError(null);
+    setDish("");
+    setEatenAt(formatLocalDateTime(now));
+    setKind(estimateMealKind(now));
+    setKindChosen(false);
+  }, [submitResult]);
 
   const entries = foods.map((food) => ({
     id: food.id,
@@ -321,10 +347,17 @@ export function RecordForm() {
             ))}
           </select>
         </label>
-        {/* 料理名の入力は任意（受入基準 4.7）。読むのは送信のときだけなので state を持たない。 */}
+        {/* 料理名の入力は任意（受入基準 4.7）。成功したら空に戻すため state で持つ。 */}
         <label className="flex flex-col gap-1 text-sm" htmlFor="dish">
           料理名（任意）
-          <input id="dish" className={FIELD_CLASS} type="text" name="dish" />
+          <input
+            id="dish"
+            className={FIELD_CLASS}
+            type="text"
+            name="dish"
+            value={dish}
+            onChange={(event) => setDish(event.target.value)}
+          />
         </label>
       </fieldset>
 
@@ -352,6 +385,7 @@ export function RecordForm() {
             className={FIELD_CLASS}
             type="number"
             inputMode="decimal"
+            min="0"
             step="any"
             value={draft.kcalPer100g}
             onChange={(event) => updateDraft("kcalPer100g", event.target.value)}
@@ -364,6 +398,7 @@ export function RecordForm() {
             className={FIELD_CLASS}
             type="number"
             inputMode="decimal"
+            min="0"
             step="any"
             value={draft.proteinPer100g}
             onChange={(event) =>
@@ -378,6 +413,7 @@ export function RecordForm() {
             className={FIELD_CLASS}
             type="number"
             inputMode="decimal"
+            min="0"
             step="any"
             value={draft.grams}
             onChange={(event) => updateDraft("grams", event.target.value)}

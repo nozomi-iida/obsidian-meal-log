@@ -88,6 +88,9 @@ graph TB
     Proxy[proxy]
     Form[record-form]
     Action[actions]
+    Headers[next/headers]
+    BasicAuth[basic-auth]
+    Types[types]
     Nutrition[nutrition]
     MealTime[meal-time]
     Note[note]
@@ -95,22 +98,43 @@ graph TB
     GitHub[vault リポジトリ]
 
     Browser --> Proxy
+    Proxy --> BasicAuth
     Proxy --> Form
     Form --> Action
     Form --> Nutrition
     Form --> MealTime
+    Form --> Types
+    Action --> Headers
+    Action --> BasicAuth
     Action --> Nutrition
     Action --> Note
     Action --> Vault
+    Action --> Types
     Note --> Nutrition
+    Note --> Types
+    Nutrition --> Types
+    MealTime --> Types
     Vault --> GitHub
 
     subgraph HTTP を知らない層
         Nutrition
         MealTime
         Note
+        Types
+    end
+
+    subgraph app-foundation の所有物
+        Proxy
+        BasicAuth
     end
 ```
+
+**`Action --> BasicAuth` は多層防御の 2 層目である。** 上流 spec（`app-foundation`）の
+design.md が「Server Function は独立したルートではなく、それが使われているルートへの
+POST として扱われる。`matcher` の変更や Server Function を別ルートへ移すリファクタに
+よって、保護が静かに外れうる。その関数の内部でも認証を検証すること」と名指しで要求した
+依存であり、**この辺を外すと遮断点が効いている間は誰も気づかないまま保護が 1 層になる**。
+図から省略すると、図だけを根拠にしたリファクタで失われる。
 
 **Architecture Integration**:
 
@@ -153,10 +177,22 @@ src/
     ├── actions.ts           Server Action。入力を受けて記録する
     ├── actions.test.ts      入力の検証のみを対象にする
     ├── record-form.tsx      記録フォーム。クライアントコンポーネント
+    ├── record-form.test.tsx 画面の振る舞い。送信項目・結果の表示・入力の保持
     └── page.tsx             記録画面。フォームを置くだけ
 ```
 
 `actions.test.ts` が対象にするのは**入力の検証だけ**である。食材が 0 件、数値として解釈できない値、名前が空といった入力は、外部 API にもフレームワークのランタイムにも触れずに弾かれるため、テストから確かめられる。成功経路は `headers()` と外部への通信を含むため、手作業の確認で担保する。
+
+`record-form.test.tsx` は `jsdom` と `@testing-library/react` を使い、**画面の振る舞いのうち機械的に確かめられるもの**を対象にする。見た目は手作業の確認で担保するが、次の 4 つは回帰を検知する手段が必要だと実装中に判明したため、テストで押さえている。
+
+| 対象 | なぜテストが必要か |
+|---|---|
+| 送信する項目の名前と中身 | 受付が読む名前とずれると、画面は送ったのにサーバーが入力不正を返す。利用者には理由が分からない |
+| 日時の 0 埋め | `padStart` が外れると `2026-1-5T9:05` が送られ、**1 桁になる時刻の食事だけ**が静かに記録できなくなる |
+| 失敗したときに入力が残ること | `<form action={formAction}>` に戻すとブラウザのリセットで区分が先頭に戻り、やり直すと利用者が選んでいない区分で記録される |
+| 成功したときだけクリアされること | 失敗時にもクリアすると受入基準 5.4 が壊れる |
+
+いずれも「実装を壊してテストが落ちるか」を確かめたうえで入れている。`recordMeal` の呼び出しだけを差し替え、**表示の分岐と入力の保持**を検証する。受付の中身は `actions.test.ts` が受け持つ。
 
 食材のデータを持つファイルは置かない。**アプリは何も覚えない。**
 
@@ -166,6 +202,7 @@ src/
 
 - `src/app/page.tsx` — `create-next-app` の雛形を記録画面に置き換える
 - `.env.local.example` — vault への書き込みに必要な環境変数を追記する。値は含めない
+- `.gitignore` — 動作確認で撮ったスクリーンショットを除外する。Playwright はファイル名を指定するとリポジトリ直下に出すため
 
 ## System Flows
 
@@ -711,7 +748,7 @@ foods: [白米, 鶏もも]
 
 ### Unit Tests
 
-純粋関数を対象とする。外部との通信を含む `vault` は対象にしない。
+純粋関数と、画面の振る舞いのうち機械的に確かめられるものを対象とする。外部との通信を含む `vault` は対象にしない。
 
 1. `calculateItem` が入力された 100g あたりの値と量から整数の栄養価を返す（2.1, 2.3）
 2. `sumNutrition` の結果が、丸めた食材ごとの値の和に等しい（2.2, 2.4）
@@ -721,6 +758,18 @@ foods: [白米, 鶏もも]
 6. `buildNote` の frontmatter が 8 項目を持ち、`menu` に量が入り `foods` に量が入らない（4.3, 4.4, 4.5）
 7. `buildNote` の本文に並べた数値の和が frontmatter の合計に等しい（4.6, 2.4）
 8. `buildNote` が料理名の無い記録で `dish` を空の値で出力し、8 項目を保つ（4.7）
+9. `buildNote` が利用者の入力が入る欄を引用し、`,` や `: ` を含む名前でも 8 項目を保つ（4.3, 4.4, 4.5）
+10. `parseNumber` が負の数値を受け付けず、0 は受け付ける（2.3, 2.6）
+
+画面側（`record-form.test.tsx`）が対象にするもの:
+
+11. 送信する項目の名前と中身が受付の読む形に一致する（1.2, 3.1, 4.7）
+12. 日時が 0 埋めされた形で送られる。**月・日・時・分が 1 桁になる時刻で確かめる**（3.5, 4.2）
+13. 食材が 0 件のとき、または時刻が空のときは送信を受け付けない（1.6）
+14. 送信中は送信中であることを示し、重ねての送信を受け付けない（5.1）
+15. 結果が分類ごとに対処の分かる文面で示される（5.2, 5.3, 6.3）
+16. **失敗したときは入力が残り、成功したときだけ初期状態に戻る**（5.2, 5.4）
+17. 負の数値では食材を加えられず、0 は加えられる（2.3, 2.6）
 
 ### 外部 API の検証は実測で行う
 
