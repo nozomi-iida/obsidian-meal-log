@@ -6,6 +6,27 @@ export type FoodInput = {
   readonly grams: number;
 };
 
+/**
+ * 食材 1 件の推定の結果。
+ *
+ * **推定できなかったことを `kcalPer100g` と `proteinPer100g` の欠落で表す。**
+ * 0 で埋めない。0 kcal の食品（水、お茶）と区別がつかなくなり、タンパク質の
+ * 集計が静かに狂う。
+ */
+export type FoodEstimate =
+  | {
+      readonly name: string;
+      readonly ok: true;
+      readonly kcalPer100g: number;
+      readonly proteinPer100g: number;
+    }
+  | {
+      readonly name: string;
+      readonly ok: false;
+      /** なぜ推定できなかったか。利用者に示す。 */
+      readonly note: string;
+    };
+
 /** 記録の対象に加えた食材。量が決まり、栄養価は整数に丸められている。 */
 export type MealItem = {
   readonly name: string;
