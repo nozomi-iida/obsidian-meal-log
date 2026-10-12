@@ -10,38 +10,50 @@ import {
 } from "react";
 import { estimateMealKind } from "@/lib/meal-time";
 import { calculateItem, sumNutrition } from "@/lib/nutrition";
-import type { FoodInput, MealKind } from "@/lib/types";
+import type { MealKind } from "@/lib/types";
 import { type RecordState, recordMeal } from "./actions";
 
 /**
- * 下書き行の入力値。
+ * 下書き行の入力値。利用者が入力するのは食材名と量の 2 つだけである。
+ *
+ * 100g あたりの値は入力を求めない（受入基準 1.2）。利用者が自分で調べる手間を
+ * なくすことがこの機能の目的であり、欄を残すと調べる余地を残してしまう。
  *
  * 数値の欄も文字列のまま持つ。入力途中は数値として読めない状態を通るため、
  * 数値へ変換するのは記録の対象に加えるときだけにする。
  */
 type Draft = {
   readonly name: string;
-  readonly kcalPer100g: string;
-  readonly proteinPer100g: string;
   readonly grams: string;
 };
 
 const EMPTY_DRAFT: Draft = {
   name: "",
-  kcalPer100g: "",
-  proteinPer100g: "",
   grams: "",
 };
 
-/** 記録の対象に加えた食材。一覧の key に使う識別子を添える。 */
-type Food = {
+/**
+ * 記録の対象に加えた食材 1 件。一覧の key に使う識別子を添える。
+ *
+ * `per100g` が null のあいだは 100g あたりの値を持たない。加えた直後は必ず
+ * この状態になる。値が無い食材があるうちは記録を受け付けない（受入基準 4.5）。
+ *
+ * `edited` は利用者が自ら値を決めたことの印である。`meal-record` の
+ * `kindChosen`（利用者が食事区分を選んだか）と同じ役割を持つ。
+ */
+type Entry = {
   readonly id: number;
-  readonly input: FoodInput;
+  readonly name: string;
+  readonly grams: number;
+  readonly per100g: { readonly kcal: number; readonly protein: number } | null;
+  readonly edited: boolean;
+  /** 100g あたりの値が決まらなかった理由。利用者に示す。 */
+  readonly note: string | null;
 };
 
 /** 下書きを読んだ結果。不正なときは利用者に示す文面を持つ。 */
 type DraftResult =
-  | { readonly ok: true; readonly food: FoodInput }
+  | { readonly ok: true; readonly entry: Omit<Entry, "id"> }
   | { readonly ok: false; readonly message: string };
 
 /**
@@ -113,22 +125,25 @@ function parseNumber(value: string): number | null {
  *
  * 送信の受付（`actions.ts`）と同じ条件で弾く。検証が二重になるが、
  * 画面側で弾くほうが利用者に早く伝わる。
+ *
+ * 読めた食材は 100g あたりの値を持たない状態で返す。値は推定で埋まる。
  */
 function readDraft(draft: Draft): DraftResult {
   const name = draft.name.trim();
   if (name === "") {
     return { ok: false, message: "食材名を入力してください。" };
   }
-  const kcalPer100g = parseNumber(draft.kcalPer100g);
-  const proteinPer100g = parseNumber(draft.proteinPer100g);
   const grams = parseNumber(draft.grams);
-  if (kcalPer100g === null || proteinPer100g === null || grams === null) {
+  if (grams === null) {
     return {
       ok: false,
-      message: "カロリー・タンパク質・量は 0 以上の数値で入力してください。",
+      message: "食べた量は 0 以上の数値で入力してください。",
     };
   }
-  return { ok: true, food: { name, kcalPer100g, proteinPer100g, grams } };
+  return {
+    ok: true,
+    entry: { name, grams, per100g: null, edited: false, note: null },
+  };
 }
 
 /**
@@ -176,7 +191,7 @@ function describeResult(state: RecordState): string | null {
  * 画面に出る数字と vault に書かれる数字が一致する。
  */
 export function RecordForm() {
-  const [foods, setFoods] = useState<readonly Food[]>([]);
+  const [entries, setEntries] = useState<readonly Entry[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [dish, setDish] = useState("");
@@ -216,7 +231,7 @@ export function RecordForm() {
     // 時刻は現在時刻に戻し、区分はその時刻から推定し直す。利用者が自ら選んだ
     // 指定も解除するのは、前の記録の指定を次の記録に持ち越さないためである。
     const now = new Date();
-    setFoods([]);
+    setEntries([]);
     setDraft(EMPTY_DRAFT);
     setDraftError(null);
     setDish("");
@@ -225,12 +240,27 @@ export function RecordForm() {
     setKindChosen(false);
   }, [submitResult]);
 
-  const entries = foods.map((food) => ({
-    id: food.id,
-    input: food.input,
-    item: calculateItem(food.input),
+  // 栄養価を出せるのは 100g あたりの値を持つ食材だけである。値が無い食材は
+  // 0 として数えない。0 kcal の食品（水、お茶）と区別がつかなくなり、
+  // 合計が「値が揃っている」ように見えてしまう。
+  const rows = entries.map((entry) => ({
+    entry,
+    item:
+      entry.per100g === null
+        ? null
+        : calculateItem({
+            name: entry.name,
+            kcalPer100g: entry.per100g.kcal,
+            proteinPer100g: entry.per100g.protein,
+            grams: entry.grams,
+          }),
   }));
-  const total = sumNutrition(entries.map((entry) => entry.item));
+  const total = sumNutrition(
+    rows.flatMap((row) => (row.item === null ? [] : [row.item])),
+  );
+  // 100g あたりの値を持たない食材が 1 件でもあるか。記録を受け付けない条件に使う
+  // （受入基準 4.5）。
+  const hasMissingValue = entries.some((entry) => entry.per100g === null);
 
   function updateDraft(field: keyof Draft, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -288,7 +318,7 @@ export function RecordForm() {
     });
   }
 
-  function addFood() {
+  function addEntry() {
     const result = readDraft(draft);
     if (!result.ok) {
       setDraftError(result.message);
@@ -296,13 +326,13 @@ export function RecordForm() {
     }
     const id = nextId.current;
     nextId.current += 1;
-    setFoods((current) => [...current, { id, input: result.food }]);
+    setEntries((current) => [...current, { id, ...result.entry }]);
     setDraft(EMPTY_DRAFT);
     setDraftError(null);
   }
 
-  function removeFood(id: number) {
-    setFoods((current) => current.filter((food) => food.id !== id));
+  function removeEntry(id: number) {
+    setEntries((current) => current.filter((entry) => entry.id !== id));
   }
 
   return (
@@ -378,34 +408,6 @@ export function RecordForm() {
             onChange={(event) => updateDraft("name", event.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm" htmlFor="draft-kcal">
-          100g あたりのカロリー
-          <input
-            id="draft-kcal"
-            className={FIELD_CLASS}
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="any"
-            value={draft.kcalPer100g}
-            onChange={(event) => updateDraft("kcalPer100g", event.target.value)}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm" htmlFor="draft-protein">
-          100g あたりのタンパク質
-          <input
-            id="draft-protein"
-            className={FIELD_CLASS}
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="any"
-            value={draft.proteinPer100g}
-            onChange={(event) =>
-              updateDraft("proteinPer100g", event.target.value)
-            }
-          />
-        </label>
         <label className="flex flex-col gap-1 text-sm" htmlFor="draft-grams">
           食べた量（g）
           <input
@@ -419,7 +421,7 @@ export function RecordForm() {
             onChange={(event) => updateDraft("grams", event.target.value)}
           />
         </label>
-        <button className={BUTTON_CLASS} type="button" onClick={addFood}>
+        <button className={BUTTON_CLASS} type="button" onClick={addEntry}>
           この食材を加える
         </button>
         {draftError === null ? null : (
@@ -431,41 +433,53 @@ export function RecordForm() {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium">記録の対象</h2>
-        {entries.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="text-sm">食材を 1 件以上加えると送信できます。</p>
         ) : (
           <ul className="flex flex-col">
-            {entries.map((entry) => (
+            {rows.map((row) => (
               <li
-                key={entry.id}
+                key={row.entry.id}
                 className="flex flex-col items-start gap-1 border-b border-foreground/20 py-3"
               >
                 {/*
                   確定した食材だけを 4 本組の項目として送る。確定した数だけ並ぶため、
                   4 つの繰り返し項目の長さは構造上必ず一致する。
+
+                  100g あたりの値を持たない食材も 4 項目すべてを並べ、値の無い
+                  2 項目は空で送る。項目を省くと長さの一致が崩れて別の食材の値が
+                  隣にずれて入り、`name` ごと省くとその食材が記録から静かに抜ける。
+                  空で送れば受付の `parseNumber` が null を返して送信全体が入力不正に
+                  なる。値が揃わないうちは「記録する」を押せないため通常は送られない
+                  が、その無効化が壊れたときに誤った記録が作られるのを受付が止める。
                 */}
-                <input type="hidden" name="name" value={entry.input.name} />
+                <input type="hidden" name="name" value={row.entry.name} />
                 <input
                   type="hidden"
                   name="kcalPer100g"
-                  value={entry.input.kcalPer100g}
+                  value={row.entry.per100g?.kcal ?? ""}
                 />
                 <input
                   type="hidden"
                   name="proteinPer100g"
-                  value={entry.input.proteinPer100g}
+                  value={row.entry.per100g?.protein ?? ""}
                 />
-                <input type="hidden" name="grams" value={entry.input.grams} />
+                <input type="hidden" name="grams" value={row.entry.grams} />
                 <span className="font-medium">
-                  {entry.item.name} {entry.item.grams}g
+                  {row.entry.name} {row.entry.grams}g
                 </span>
-                <span className="text-sm">
-                  {entry.item.kcal} kcal / タンパク質 {entry.item.protein} g
-                </span>
+                {/* 値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で示す。 */}
+                {row.item === null ? (
+                  <span className="text-sm">100g あたりの値がありません</span>
+                ) : (
+                  <span className="text-sm">
+                    {row.item.kcal} kcal / タンパク質 {row.item.protein} g
+                  </span>
+                )}
                 <button
                   className={BUTTON_CLASS}
                   type="button"
-                  onClick={() => removeFood(entry.id)}
+                  onClick={() => removeEntry(row.entry.id)}
                 >
                   取り消す
                 </button>
@@ -486,11 +500,17 @@ export function RecordForm() {
           作ろうとして重複になる（受入基準 5.1）。対象が 1 件も無いときも押せない
           （受入基準 1.6）。食べた時刻が空のときも押せないのは、そのまま送ると
           受付が入力不正を返すものの、その理由はどの欄が悪いかを区別しないためである。
+
+          100g あたりの値を持たない食材があるときも押せない（受入基準 4.5）。
+          その食材の 2 項目は空で送られ、受付は送信全体を入力不正として弾く。
+          押せる状態にしておくと、利用者には「入力が不正です」としか見えない。
         */}
         <button
           className={BUTTON_CLASS}
           type="submit"
-          disabled={pending || entries.length === 0 || eatenAt === ""}
+          disabled={
+            pending || entries.length === 0 || eatenAt === "" || hasMissingValue
+          }
         >
           {pending ? "送信中…" : "記録する"}
         </button>

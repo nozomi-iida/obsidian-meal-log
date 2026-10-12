@@ -7,28 +7,16 @@ import { RecordForm } from "./record-form";
 // ここで確かめるのは、受付に渡る入力と、受付が返した結果の見せ方である。
 vi.mock("./actions", () => ({ recordMeal: vi.fn() }));
 
-/** 下書きの 4 項目を埋めて「この食材を加える」を押す。 */
-function addFood(food: {
-  name?: string;
-  kcal?: string;
-  protein?: string;
-  grams?: string;
-}) {
+/** 下書きの 2 項目を埋めて「この食材を加える」を押す。 */
+function addEntry(food: { name?: string; grams?: string }) {
   fillDraft(food);
   fireEvent.click(screen.getByRole("button", { name: "この食材を加える" }));
 }
 
 /** 下書きの欄を埋める。省略した欄は未入力のまま残す。 */
-function fillDraft(food: {
-  name?: string;
-  kcal?: string;
-  protein?: string;
-  grams?: string;
-}) {
+function fillDraft(food: { name?: string; grams?: string }) {
   const fields: readonly [string, string | undefined][] = [
     ["食材名", food.name],
-    ["100g あたりのカロリー", food.kcal],
-    ["100g あたりのタンパク質", food.protein],
     ["食べた量（g）", food.grams],
   ];
   for (const [label, value] of fields) {
@@ -66,6 +54,26 @@ function submitButton(container: HTMLElement): HTMLButtonElement {
   return button;
 }
 
+function form(container: HTMLElement): HTMLFormElement {
+  const found = container.querySelector("form");
+  if (!found) {
+    throw new Error("form が見つからない");
+  }
+  return found;
+}
+
+/**
+ * 送信する。ボタンを押すのではなく form に submit を起こす。
+ *
+ * 100g あたりの値はまだ推定できないため、どの食材も値を持たない。送信ボタンは
+ * 常に無効であり（受入基準 4.5）、押しても送信が起きない。送信の経路そのものは
+ * 壊れていないことを確かめたいので、無効化を迂回した送信として起こす。
+ * 無効化が壊れたときに実際に起きるのもこの経路である。
+ */
+function submitForm(container: HTMLElement) {
+  fireEvent.submit(form(container));
+}
+
 /** 受付に渡った FormData。送信していなければ落とす。 */
 function submittedFormData(): FormData {
   const call = vi.mocked(recordMeal).mock.calls[0];
@@ -85,36 +93,56 @@ describe("RecordForm", () => {
     vi.useRealTimers();
   });
 
-  it("食材を 3 件加えると一覧に並び、合計が各食材の値の和になる", () => {
+  it("100g あたりの値の入力を求めない", () => {
     render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    addFood({ name: "ごはん", kcal: "156", protein: "2.5", grams: "150" });
-    addFood({ name: "ブロッコリー", kcal: "33", protein: "4.3", grams: "50" });
+    // 利用者が入力するのは食材名と量の 2 つだけである（受入基準 1.2）
+    expect(
+      screen.queryByLabelText("100g あたりのカロリー"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("100g あたりのタンパク質"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("食材名")).toBeInTheDocument();
+    expect(screen.getByLabelText("食べた量（g）")).toBeInTheDocument();
+  });
+
+  it("食材を 3 件加えると一覧に並び、いずれも 100g あたりの値を持たない", () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏むね", grams: "100" });
+    addEntry({ name: "ごはん", grams: "150" });
+    addEntry({ name: "ブロッコリー", grams: "50" });
 
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
     expect(screen.getByText("鶏むね 100g")).toBeInTheDocument();
     expect(screen.getByText("ごはん 150g")).toBeInTheDocument();
     expect(screen.getByText("ブロッコリー 50g")).toBeInTheDocument();
 
-    // 165 + 234 + 17 = 416、23 + 4 + 2 = 29
-    expect(screen.getByText("416 kcal / タンパク質 29 g")).toBeInTheDocument();
+    // 値が無いことを言葉で示す。空欄にすると 0 と区別がつかない
+    expect(screen.getAllByText("100g あたりの値がありません")).toHaveLength(3);
+    // 値を持たない食材を 0 として数えない。数えると値が揃っているように見える。
+    // 合計が食材ごとの値の和になることは、値を持てるようになってから確かめる
+    expect(screen.getByText("0 kcal / タンパク質 0 g")).toBeInTheDocument();
   });
 
-  it("加えた食材を取り消すと対象から外れ、合計が減る", () => {
+  it("加えた食材を取り消すと対象から外れる", () => {
     render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    addEntry({ name: "鶏むね", grams: "100" });
     fireEvent.click(screen.getByRole("button", { name: "取り消す" }));
 
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    expect(
+      screen.getByText("食材を 1 件以上加えると送信できます。"),
+    ).toBeInTheDocument();
     expect(screen.getByText("0 kcal / タンパク質 0 g")).toBeInTheDocument();
   });
 
   it("食材名が空のままでは加えられず、名前が必要であることを示す", () => {
     render(<RecordForm />);
 
-    addFood({ kcal: "165", protein: "23", grams: "100" });
+    addEntry({ grams: "100" });
 
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
     expect(screen.getByRole("alert")).toHaveTextContent(
@@ -125,30 +153,53 @@ describe("RecordForm", () => {
   it("量が未入力のままでは加えられず、数値が必要であることを示す", () => {
     render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23" });
+    addEntry({ name: "鶏むね" });
 
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "カロリー・タンパク質・量は 0 以上の数値で入力してください。",
+      "食べた量は 0 以上の数値で入力してください。",
     );
   });
 
   it("下書きの入力を送信する項目に含めない", () => {
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    addEntry({ name: "鶏むね", grams: "100" });
     // 加えないまま下書きを埋めた状態でも、確定した食材だけが送信の項目になること
-    fillDraft({ name: "ごはん", kcal: "156" });
+    fillDraft({ name: "ごはん", grams: "150" });
 
-    const form = container.querySelector("form");
-    if (!form) {
-      throw new Error("form が見つからない");
-    }
-    const formData = new FormData(form);
+    const formData = new FormData(form(container));
     expect(formData.getAll("name")).toEqual(["鶏むね"]);
-    expect(formData.getAll("kcalPer100g")).toEqual(["165"]);
-    expect(formData.getAll("proteinPer100g")).toEqual(["23"]);
     expect(formData.getAll("grams")).toEqual(["100"]);
+  });
+
+  it("値を持たない食材も 4 項目すべてを並べ、値の無い 2 項目を空で送る", () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    addEntry({ name: "白米", grams: "200" });
+
+    const formData = new FormData(form(container));
+    // 4 つの繰り返し項目の長さが揃っていること。揃っていないと受付は組み合わせを
+    // 作れず、項目を省くと別の食材の値が隣にずれて入る
+    expect(formData.getAll("name")).toEqual(["鶏もも", "白米"]);
+    expect(formData.getAll("grams")).toEqual(["300", "200"]);
+    expect(formData.getAll("kcalPer100g")).toEqual(["", ""]);
+    expect(formData.getAll("proteinPer100g")).toEqual(["", ""]);
+  });
+
+  it("値を持たない食材を含む送信を受付が入力不正として扱える形で送る", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    submitForm(container);
+
+    // 空の 2 項目は受付の parseNumber が null を返すため、送信全体が弾かれる。
+    // 「記録する」の無効化が壊れても、値の無い記録が vault に書かれない
+    await waitFor(() => expect(recordMeal).toHaveBeenCalledTimes(1));
+    const formData = submittedFormData();
+    expect(formData.getAll("kcalPer100g")).toEqual([""]);
+    expect(formData.getAll("proteinPer100g")).toEqual([""]);
   });
 
   it("画面を開くと現在の時刻が入り、その時刻から推定した区分が示される", () => {
@@ -198,13 +249,9 @@ describe("RecordForm", () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 11, 16, 30) });
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    addEntry({ name: "鶏むね", grams: "100" });
 
-    const form = container.querySelector("form");
-    if (!form) {
-      throw new Error("form が見つからない");
-    }
-    const formData = new FormData(form);
+    const formData = new FormData(form(container));
     // 秒もタイムゾーンも付かない形で送る。送信の受付はこの形式だけを受ける
     expect(formData.get("eatenAt")).toBe("2026-10-11T16:30");
     expect(formData.get("kind")).toBe("間食");
@@ -216,9 +263,9 @@ describe("RecordForm", () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 11, 16, 30) });
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    addEntry({ name: "鶏むね", grams: "100" });
     changeDish("サラダ");
-    fireEvent.click(submitButton(container));
+    submitForm(container);
 
     await waitFor(() => expect(recordMeal).toHaveBeenCalledTimes(1));
     const formData = submittedFormData();
@@ -229,14 +276,24 @@ describe("RecordForm", () => {
     expect(formData.get("dish")).toBe("サラダ");
   });
 
+  it("100g あたりの値を持たない食材があるときは記録を受け付けない", () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+
+    // 値が揃うまで押せない（受入基準 4.5）。押せる状態にしておくと、
+    // 受付が返す「入力が不正です」だけが見え、理由が利用者に分からない
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(submitButton(container)).toBeDisabled();
+  });
+
   it("食材が 0 件のとき、または食べた時刻が空のときは送信を受け付けない", () => {
     const { container } = render(<RecordForm />);
 
     // 対象が 1 件も無いうちは送れない（受入基準 1.6）
     expect(submitButton(container)).toBeDisabled();
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    expect(submitButton(container)).toBeEnabled();
+    addEntry({ name: "鶏むね", grams: "100" });
 
     // 時刻が空のまま送ると受付は入力不正を返すが、その理由はどの欄が
     // 悪いかを区別しない。送る前に止める。
@@ -244,7 +301,7 @@ describe("RecordForm", () => {
     expect(submitButton(container)).toBeDisabled();
   });
 
-  it("送信中は送信中であることを示し、重ねての送信を受け付けない", async () => {
+  it("送信中は送信中であることを示し、送信を受け付けない状態にする", async () => {
     let finish: (state: RecordState) => void = () => {};
     vi.mocked(recordMeal).mockImplementation(
       () =>
@@ -254,19 +311,19 @@ describe("RecordForm", () => {
     );
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    fireEvent.click(submitButton(container));
+    addEntry({ name: "鶏むね", grams: "100" });
+    submitForm(container);
 
-    await waitFor(() => expect(submitButton(container)).toBeDisabled());
-    expect(submitButton(container)).toHaveTextContent("送信中");
+    await waitFor(() =>
+      expect(submitButton(container)).toHaveTextContent("送信中"),
+    );
+    expect(submitButton(container)).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("送信中");
 
-    // 重ねて押しても 2 回目は受付に届かない（受入基準 5.1）
-    fireEvent.click(submitButton(container));
-    expect(recordMeal).toHaveBeenCalledTimes(1);
-
     finish({ status: "success", fileName: "2026-10-11-1630.md" });
-    await waitFor(() => expect(submitButton(container)).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("記録しました"),
+    );
   });
 
   it("記録が成功すると成功したことと作成したファイルの名前を示す", async () => {
@@ -276,8 +333,8 @@ describe("RecordForm", () => {
     });
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    fireEvent.click(submitButton(container));
+    addEntry({ name: "鶏むね", grams: "100" });
+    submitForm(container);
 
     await waitFor(() => {
       const status = screen.getByRole("status");
@@ -296,8 +353,8 @@ describe("RecordForm", () => {
     changeEatenAt("2026-10-11T19:00");
     chooseKind("寝る前");
     changeDish("鍋");
-    addFood({ name: "鶏もも", kcal: "200", protein: "17", grams: "400" });
-    fireEvent.click(submitButton(container));
+    addEntry({ name: "鶏もも", grams: "400" });
+    submitForm(container);
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
@@ -311,7 +368,6 @@ describe("RecordForm", () => {
     expect(screen.getByLabelText("食べた時刻")).toHaveValue("2026-10-11T19:00");
     expect(screen.getByLabelText("食事区分")).toHaveValue("寝る前");
     expect(screen.getByLabelText("料理名（任意）")).toHaveValue("鍋");
-    expect(submitButton(container)).toBeEnabled();
   });
 
   it("権限で失敗したときはトークンの期限を疑えることを示す", async () => {
@@ -321,8 +377,8 @@ describe("RecordForm", () => {
     });
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    fireEvent.click(submitButton(container));
+    addEntry({ name: "鶏むね", grams: "100" });
+    submitForm(container);
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("期限"),
@@ -336,8 +392,8 @@ describe("RecordForm", () => {
     });
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    fireEvent.click(submitButton(container));
+    addEntry({ name: "鶏むね", grams: "100" });
+    submitForm(container);
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("時間を置いて"),
@@ -351,8 +407,8 @@ describe("RecordForm", () => {
     });
     const { container } = render(<RecordForm />);
 
-    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
-    fireEvent.click(submitButton(container));
+    addEntry({ name: "鶏むね", grams: "100" });
+    submitForm(container);
 
     // 戻り値は変数名を持たない（資格情報に関わる情報を載せないため）。
     // 画面側が静的な文面として持つ（受入基準 6.3）。
@@ -363,46 +419,31 @@ describe("RecordForm", () => {
       expect(status).toHaveTextContent("VAULT_TOKEN");
     });
   });
+
   it("負の数値では加えられず、0 以上であることを示す", () => {
     // 量が負だと負のカロリーが vault に書かれる。画面側で弾いて早く伝える。
-    const negatives = [
-      { name: "鶏むね", kcal: "165", protein: "23", grams: "-100" },
-      { name: "鶏むね", kcal: "-165", protein: "23", grams: "100" },
-      { name: "鶏むね", kcal: "165", protein: "-23", grams: "100" },
-    ];
+    render(<RecordForm />);
 
-    for (const food of negatives) {
-      const { unmount } = render(<RecordForm />);
+    addEntry({ name: "鶏むね", grams: "-100" });
 
-      addFood(food);
-
-      expect(screen.queryAllByRole("listitem")).toHaveLength(0);
-      expect(screen.getByRole("alert")).toHaveTextContent("0 以上");
-      unmount();
-    }
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    expect(screen.getByRole("alert")).toHaveTextContent("0 以上");
   });
 
   it("0 は加えられる。条件は 0 以上であり、0 より大きいではない", () => {
     render(<RecordForm />);
 
-    addFood({ name: "水", kcal: "0", protein: "0", grams: "100" });
+    addEntry({ name: "水", grams: "0" });
 
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
-    expect(screen.getByText("水 100g")).toBeInTheDocument();
+    expect(screen.getByText("水 0g")).toBeInTheDocument();
   });
 
   it("数値の欄は 0 未満を入力できない状態にする", () => {
     render(<RecordForm />);
 
     // ブラウザ側の 1 層目。回避された送信は受付が弾く。
-    const labels = [
-      "100g あたりのカロリー",
-      "100g あたりのタンパク質",
-      "食べた量（g）",
-    ];
-    for (const label of labels) {
-      expect(screen.getByLabelText(label)).toHaveAttribute("min", "0");
-    }
+    expect(screen.getByLabelText("食べた量（g）")).toHaveAttribute("min", "0");
   });
 
   it("記録が成功すると入力が初期状態に戻り、結果の表示だけが残る", async () => {
@@ -416,17 +457,16 @@ describe("RecordForm", () => {
     changeEatenAt("2026-10-11T19:00");
     chooseKind("寝る前");
     changeDish("鍋");
-    addFood({ name: "鶏もも", kcal: "200", protein: "17", grams: "400" });
-    fillDraft({ name: "ごはん", kcal: "156" });
+    addEntry({ name: "鶏もも", grams: "400" });
     // 下書きの指摘が出ている状態から送る。成功後まで残すと、何も入力して
-    // いない欄に対する指摘が居座る。
-    addFood({ kcal: "100" });
+    // いない欄に対する指摘が居座る。量を空のまま加えようとして指摘を出す
+    addEntry({ name: "ごはん" });
     expect(screen.getByRole("alert")).toBeInTheDocument();
 
     // 送信の直前に時計を進める。時刻が「画面を開いたときの値のまま」ではなく
     // 「現在時刻に戻る」ことを区別するためで、1 桁の月日時分で 0 埋めも押さえる。
     vi.setSystemTime(new Date(2026, 0, 5, 9, 5));
-    fireEvent.click(submitButton(container));
+    submitForm(container);
 
     // 入力が戻るのは結果の表示より 1 描画あと（効果が走ってから）になる。
     // 結果の表示を待っただけでは、戻る前の状態を見てしまうことがある。
