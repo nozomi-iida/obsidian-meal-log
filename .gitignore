@@ -47,3 +47,6 @@ next-env.d.ts
 
 # Playwright MCP の出力（スクリーンショット・スナップショット）
 /.playwright-mcp/
+
+# 動作確認で撮ったスクリーンショット（Playwright はファイル名を指定するとリポジトリ直下に出す）
+/*.png
