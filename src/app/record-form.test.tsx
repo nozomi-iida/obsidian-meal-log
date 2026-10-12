@@ -1,6 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type RecordState, recordMeal } from "./actions";
 import { RecordForm } from "./record-form";
+
+// 送信の受付だけを差し替える。受付の中身（検証・書き込み）は actions.test.ts が受け持つ。
+// ここで確かめるのは、受付に渡る入力と、受付が返した結果の見せ方である。
+vi.mock("./actions", () => ({ recordMeal: vi.fn() }));
 
 /** 下書きの 4 項目を埋めて「この食材を加える」を押す。 */
 function addFood(food: {
@@ -43,7 +48,39 @@ function chooseKind(value: string) {
   fireEvent.change(screen.getByLabelText("食事区分"), { target: { value } });
 }
 
+/** 料理名の欄を書き換える。 */
+function changeDish(value: string) {
+  fireEvent.change(screen.getByLabelText("料理名（任意）"), {
+    target: { value },
+  });
+}
+
+/** 送信ボタン。送信中は文面が変わるため、文面ではなく種類で引く。 */
+function submitButton(container: HTMLElement): HTMLButtonElement {
+  const button = container.querySelector<HTMLButtonElement>(
+    'button[type="submit"]',
+  );
+  if (!button) {
+    throw new Error("送信ボタンが見つからない");
+  }
+  return button;
+}
+
+/** 受付に渡った FormData。送信していなければ落とす。 */
+function submittedFormData(): FormData {
+  const call = vi.mocked(recordMeal).mock.calls[0];
+  if (!call) {
+    throw new Error("受付が呼ばれていない");
+  }
+  return call[1];
+}
+
 describe("RecordForm", () => {
+  beforeEach(() => {
+    vi.mocked(recordMeal).mockReset();
+    vi.mocked(recordMeal).mockResolvedValue({ status: "idle" });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -92,7 +129,7 @@ describe("RecordForm", () => {
 
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "カロリー・タンパク質・量は数値で入力してください。",
+      "カロリー・タンパク質・量は 0 以上の数値で入力してください。",
     );
   });
 
@@ -173,5 +210,244 @@ describe("RecordForm", () => {
     expect(formData.get("kind")).toBe("間食");
     // 料理名の入力は任意（受入基準 4.7）。空のままでも項目としては送られる
     expect(formData.get("dish")).toBe("");
+  });
+
+  it("送信すると確定した食材と時刻・区分・料理名を受付に渡す", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 11, 16, 30) });
+    const { container } = render(<RecordForm />);
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    changeDish("サラダ");
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() => expect(recordMeal).toHaveBeenCalledTimes(1));
+    const formData = submittedFormData();
+    expect(formData.getAll("name")).toEqual(["鶏むね"]);
+    expect(formData.getAll("grams")).toEqual(["100"]);
+    expect(formData.get("eatenAt")).toBe("2026-10-11T16:30");
+    expect(formData.get("kind")).toBe("間食");
+    expect(formData.get("dish")).toBe("サラダ");
+  });
+
+  it("食材が 0 件のとき、または食べた時刻が空のときは送信を受け付けない", () => {
+    const { container } = render(<RecordForm />);
+
+    // 対象が 1 件も無いうちは送れない（受入基準 1.6）
+    expect(submitButton(container)).toBeDisabled();
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    expect(submitButton(container)).toBeEnabled();
+
+    // 時刻が空のまま送ると受付は入力不正を返すが、その理由はどの欄が
+    // 悪いかを区別しない。送る前に止める。
+    changeEatenAt("");
+    expect(submitButton(container)).toBeDisabled();
+  });
+
+  it("送信中は送信中であることを示し、重ねての送信を受け付けない", async () => {
+    let finish: (state: RecordState) => void = () => {};
+    vi.mocked(recordMeal).mockImplementation(
+      () =>
+        new Promise<RecordState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { container } = render(<RecordForm />);
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() => expect(submitButton(container)).toBeDisabled());
+    expect(submitButton(container)).toHaveTextContent("送信中");
+    expect(screen.getByRole("status")).toHaveTextContent("送信中");
+
+    // 重ねて押しても 2 回目は受付に届かない（受入基準 5.1）
+    fireEvent.click(submitButton(container));
+    expect(recordMeal).toHaveBeenCalledTimes(1);
+
+    finish({ status: "success", fileName: "2026-10-11-1630.md" });
+    await waitFor(() => expect(submitButton(container)).toBeEnabled());
+  });
+
+  it("記録が成功すると成功したことと作成したファイルの名前を示す", async () => {
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "success",
+      fileName: "2026-10-11-1630.md",
+    });
+    const { container } = render(<RecordForm />);
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() => {
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent("記録しました");
+      expect(status).toHaveTextContent("2026-10-11-1630.md");
+    });
+  });
+
+  it("重複したときは時刻を変えれば解決することを示し、入力した内容を残す", async () => {
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "error",
+      reason: "duplicate",
+    });
+    const { container } = render(<RecordForm />);
+
+    changeEatenAt("2026-10-11T19:00");
+    chooseKind("寝る前");
+    changeDish("鍋");
+    addFood({ name: "鶏もも", kcal: "200", protein: "17", grams: "400" });
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "食べた時刻を変えて",
+      ),
+    );
+
+    // 失敗しても入力した内容を破棄せず、やり直せる状態を保つ（受入基準 5.4）
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("鶏もも 400g")).toBeInTheDocument();
+    expect(screen.getByLabelText("食べた時刻")).toHaveValue("2026-10-11T19:00");
+    expect(screen.getByLabelText("食事区分")).toHaveValue("寝る前");
+    expect(screen.getByLabelText("料理名（任意）")).toHaveValue("鍋");
+    expect(submitButton(container)).toBeEnabled();
+  });
+
+  it("権限で失敗したときはトークンの期限を疑えることを示す", async () => {
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "error",
+      reason: "permission",
+    });
+    const { container } = render(<RecordForm />);
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("期限"),
+    );
+  });
+
+  it("通信で失敗したときは時間を置いてやり直せることを示す", async () => {
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "error",
+      reason: "network",
+    });
+    const { container } = render(<RecordForm />);
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("時間を置いて"),
+    );
+  });
+
+  it("設定が不足しているときは不足しうる変数名を画面側が示す", async () => {
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "error",
+      reason: "config",
+    });
+    const { container } = render(<RecordForm />);
+
+    addFood({ name: "鶏むね", kcal: "165", protein: "23", grams: "100" });
+    fireEvent.click(submitButton(container));
+
+    // 戻り値は変数名を持たない（資格情報に関わる情報を載せないため）。
+    // 画面側が静的な文面として持つ（受入基準 6.3）。
+    await waitFor(() => {
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent("VAULT_OWNER");
+      expect(status).toHaveTextContent("VAULT_REPO");
+      expect(status).toHaveTextContent("VAULT_TOKEN");
+    });
+  });
+  it("負の数値では加えられず、0 以上であることを示す", () => {
+    // 量が負だと負のカロリーが vault に書かれる。画面側で弾いて早く伝える。
+    const negatives = [
+      { name: "鶏むね", kcal: "165", protein: "23", grams: "-100" },
+      { name: "鶏むね", kcal: "-165", protein: "23", grams: "100" },
+      { name: "鶏むね", kcal: "165", protein: "-23", grams: "100" },
+    ];
+
+    for (const food of negatives) {
+      const { unmount } = render(<RecordForm />);
+
+      addFood(food);
+
+      expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+      expect(screen.getByRole("alert")).toHaveTextContent("0 以上");
+      unmount();
+    }
+  });
+
+  it("0 は加えられる。条件は 0 以上であり、0 より大きいではない", () => {
+    render(<RecordForm />);
+
+    addFood({ name: "水", kcal: "0", protein: "0", grams: "100" });
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("水 100g")).toBeInTheDocument();
+  });
+
+  it("数値の欄は 0 未満を入力できない状態にする", () => {
+    render(<RecordForm />);
+
+    // ブラウザ側の 1 層目。回避された送信は受付が弾く。
+    const labels = [
+      "100g あたりのカロリー",
+      "100g あたりのタンパク質",
+      "食べた量（g）",
+    ];
+    for (const label of labels) {
+      expect(screen.getByLabelText(label)).toHaveAttribute("min", "0");
+    }
+  });
+
+  it("記録が成功すると入力が初期状態に戻り、結果の表示だけが残る", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 11, 16, 30) });
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "success",
+      fileName: "2026-10-11-1900.md",
+    });
+    const { container } = render(<RecordForm />);
+
+    changeEatenAt("2026-10-11T19:00");
+    chooseKind("寝る前");
+    changeDish("鍋");
+    addFood({ name: "鶏もも", kcal: "200", protein: "17", grams: "400" });
+    fillDraft({ name: "ごはん", kcal: "156" });
+    // 下書きの指摘が出ている状態から送る。成功後まで残すと、何も入力して
+    // いない欄に対する指摘が居座る。
+    addFood({ kcal: "100" });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // 送信の直前に時計を進める。時刻が「画面を開いたときの値のまま」ではなく
+    // 「現在時刻に戻る」ことを区別するためで、1 桁の月日時分で 0 埋めも押さえる。
+    vi.setSystemTime(new Date(2026, 0, 5, 9, 5));
+    fireEvent.click(submitButton(container));
+
+    // 入力が戻るのは結果の表示より 1 描画あと（効果が走ってから）になる。
+    // 結果の表示を待っただけでは、戻る前の状態を見てしまうことがある。
+    await waitFor(() =>
+      expect(screen.queryAllByRole("listitem")).toHaveLength(0),
+    );
+
+    expect(screen.getByLabelText("料理名（任意）")).toHaveValue("");
+    expect(screen.getByLabelText("食べた時刻")).toHaveValue("2026-01-05T09:05");
+    // 区分は戻した時刻から推定し直す（9:05 なら朝）
+    expect(screen.getByLabelText("食事区分")).toHaveValue("朝");
+    // 下書きも、下書きに対する指摘も空に戻す
+    expect(screen.getByLabelText("食材名")).toHaveValue("");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // 結果は残す。受入基準 5.2 が作成したファイル名を示すことを求めている
+    expect(screen.getByRole("status")).toHaveTextContent("記録しました");
+    expect(screen.getByRole("status")).toHaveTextContent("2026-10-11-1900.md");
+
+    // 利用者が選んだ区分の指定も解除する。解除しないと、次の記録では
+    // 時刻を変えても前回選んだ区分が残り続ける（受入基準 3.3 が効かない）
+    changeEatenAt("2026-01-05T19:00");
+    expect(screen.getByLabelText("食事区分")).toHaveValue("夜");
   });
 });

@@ -142,4 +142,77 @@ describe("recordMeal", () => {
 
     expect(state).toEqual({ status: "error", reason: "invalid" });
   });
+  it("負の数値を含む入力を渡すと入力不正として返る", async () => {
+    // 栄養価の算出は 0 以上の値を前提にしている。負の量が通ると負のカロリーが
+    // vault に書かれる。画面側でも弾くが、ブラウザの検証を回避した送信を
+    // 止められるのはここだけである（多層防御）。
+    const negatives = [
+      {
+        name: "鶏むね肉",
+        kcalPer100g: "108",
+        proteinPer100g: "22",
+        grams: "-150",
+      },
+      {
+        name: "鶏むね肉",
+        kcalPer100g: "-108",
+        proteinPer100g: "22",
+        grams: "150",
+      },
+      {
+        name: "鶏むね肉",
+        kcalPer100g: "108",
+        proteinPer100g: "-22",
+        grams: "150",
+      },
+    ];
+
+    for (const item of negatives) {
+      const state = await recordMeal(
+        { status: "idle" },
+        buildFormData({ items: [item] }),
+      );
+
+      expect(
+        state,
+        `${item.kcalPer100g} / ${item.proteinPer100g} / ${item.grams}`,
+      ).toEqual({ status: "error", reason: "invalid" });
+    }
+  });
+  it("有限でない数値を含む入力を渡すと入力不正として返る", async () => {
+    // `Infinity >= 0` は真になる。0 以上の検査だけに頼ると通ってしまい、
+    // frontmatter に数値として読めない値が書かれる。
+    const state = await recordMeal(
+      { status: "idle" },
+      buildFormData({
+        items: [
+          {
+            name: "鶏むね肉",
+            kcalPer100g: "108",
+            proteinPer100g: "22",
+            grams: "Infinity",
+          },
+        ],
+      }),
+    );
+
+    expect(state).toEqual({ status: "error", reason: "invalid" });
+  });
+
+  it("0 は入力不正として扱わない。条件は 0 以上であり、0 より大きいではない", async () => {
+    // 検証を通ると認証の検証（`headers()`）へ進み、要求の外では例外になる。
+    // 入力不正として返らずここまで届くことが、0 を通している証拠になる。
+    // 画面側は 0 を加えられるため、ここで弾くと「画面で通ってサーバーで
+    // 弾かれる」という、利用者に理由の分からない失敗になる。
+    await expect(
+      recordMeal(
+        { status: "idle" },
+        buildFormData({
+          items: [
+            { name: "水", kcalPer100g: "0", proteinPer100g: "0", grams: "0" },
+          ],
+        }),
+      ),
+    ).rejects.toThrow("outside a request scope");
+  });
 });

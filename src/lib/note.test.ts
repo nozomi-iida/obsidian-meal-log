@@ -101,14 +101,14 @@ describe("buildNote", () => {
     expect(frontmatterValue(frontmatter, "date")).toBe("2026-10-11");
     expect(frontmatterValue(frontmatter, "time")).toBe("21:00");
     expect(frontmatterValue(frontmatter, "meal")).toBe("夜");
-    expect(frontmatterValue(frontmatter, "dish")).toBe("鍋");
+    expect(frontmatterValue(frontmatter, "dish")).toBe('"鍋"');
 
     // menu は読む用なので量が入る。foods は絞る用なので量を含まない。
     expect(frontmatterValue(frontmatter, "menu")).toBe(
-      "白米300g / 鶏もも400g / ブロッコリー50g",
+      '"白米300g / 鶏もも400g / ブロッコリー50g"',
     );
     expect(frontmatterValue(frontmatter, "foods")).toBe(
-      "[白米, 鶏もも, ブロッコリー]",
+      '["白米", "鶏もも", "ブロッコリー"]',
     );
     expect(frontmatterValue(frontmatter, "foods")).not.toMatch(/\d/);
   });
@@ -152,5 +152,71 @@ describe("buildNote", () => {
 
     // 空文字も値なしとして扱う。行末に空白が残らないことを行そのもので確かめる。
     expect(buildNote({ ...record, dish: "" })).toContain("\ndish:\n");
+  });
+
+  it("利用者の入力が入る欄を引用し、構造を壊す文字を無害にする", () => {
+    const note = buildNote({
+      ...record,
+      dish: "サラダ: 和風",
+      items: [
+        calculateItem({
+          name: "鶏もも, 皮なし",
+          kcalPer100g: 200,
+          proteinPer100g: 17,
+          grams: 250,
+        }),
+        calculateItem({
+          name: 'ドレッシング"特製"\\自家製',
+          kcalPer100g: 400,
+          proteinPer100g: 1,
+          grams: 10,
+        }),
+      ],
+    });
+    const frontmatter = parseFrontmatter(note);
+
+    // `: `（コロンと空白）を含む料理名。引用しないと、その行が別のキーとして
+    // 解釈されて記録が Obsidian の一覧から消える。
+    expect(frontmatterValue(frontmatter, "dish")).toBe('"サラダ: 和風"');
+
+    // `,` を含む食材名。引用しないと foods の 1 件が 2 件に割れる。
+    // 引用符と逆斜線は引用符の中でエスケープする。
+    expect(frontmatterValue(frontmatter, "foods")).toBe(
+      '["鶏もも, 皮なし", "ドレッシング\\"特製\\"\\\\自家製"]',
+    );
+    expect(frontmatterValue(frontmatter, "menu")).toBe(
+      '"鶏もも, 皮なし250g / ドレッシング\\"特製\\"\\\\自家製10g"',
+    );
+
+    // 日付・時刻・食事区分・数値は引用しない。Obsidian の Bases が日付と
+    // 数値として解釈する必要がある（受入基準 2.5）。
+    expect(note).toContain("\ndate: 2026-10-11\n");
+    expect(note).toContain("\ntime: 21:00\n");
+    expect(note).toContain("\nmeal: 夜\n");
+    expect(note).toContain("\nkcal: 540\n");
+    expect(note).toContain("\nprotein: 43\n");
+  });
+
+  it("改行を含む名前でも 1 行 1 項目の形を保つ", () => {
+    const frontmatter = parseFrontmatter(
+      buildNote({
+        ...record,
+        items: [
+          calculateItem({
+            name: "鶏もも\nmeal: 朝",
+            kcalPer100g: 200,
+            proteinPer100g: 17,
+            grams: 100,
+          }),
+        ],
+      }),
+    );
+
+    // 入力欄では改行を打てないが、フォームを介さない送信では届きうる。
+    // 改行がそのまま入ると frontmatter の項目が増える。
+    expect(frontmatter.map(([key]) => key)).toHaveLength(8);
+    expect(frontmatterValue(frontmatter, "foods")).toBe(
+      '["鶏もも\\nmeal: 朝"]',
+    );
   });
 });
