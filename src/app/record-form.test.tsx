@@ -1,11 +1,26 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type RecordState, recordMeal } from "./actions";
+import type { FoodEstimate } from "@/lib/types";
+import {
+  type EstimateState,
+  estimateFoods,
+  type RecordState,
+  recordMeal,
+} from "./actions";
 import { RecordForm } from "./record-form";
 
-// 送信の受付だけを差し替える。受付の中身（検証・書き込み）は actions.test.ts が受け持つ。
-// ここで確かめるのは、受付に渡る入力と、受付が返した結果の見せ方である。
-vi.mock("./actions", () => ({ recordMeal: vi.fn() }));
+// 送信と推定の受付だけを差し替える。受付の中身（検証・書き込み・推定の呼び出し）は
+// actions.test.ts が受け持つ。ここで確かめるのは、受付に渡る入力と、受付が
+// 返した結果の見せ方である。
+vi.mock("./actions", () => ({ recordMeal: vi.fn(), estimateFoods: vi.fn() }));
+
+/** 推定が返す 1 件分の結果。値が決まった状態を作るために使う。 */
+const CHICKEN_ESTIMATE: FoodEstimate = {
+  name: "鶏もも",
+  ok: true,
+  kcalPer100g: 190,
+  proteinPer100g: 16.6,
+};
 
 /** 下書きの 2 項目を埋めて「この食材を加える」を押す。 */
 function addEntry(food: { name?: string; grams?: string }) {
@@ -83,10 +98,43 @@ function submittedFormData(): FormData {
   return call[1];
 }
 
+/** 「推定する」ボタン。推定中は文面が変わるため、文面の一部で引く。 */
+function estimateButton(): HTMLButtonElement {
+  return screen.getByRole<HTMLButtonElement>("button", { name: /推定/ });
+}
+
+/** 推定の受付に渡った FormData。index は何回目の推定かを指す。 */
+function estimateFormData(index: number): FormData {
+  const call = vi.mocked(estimateFoods).mock.calls[index];
+  if (!call) {
+    throw new Error("推定の受付が呼ばれていない");
+  }
+  return call[1];
+}
+
+/**
+ * 推定を 1 往復させ、加えた食材に 100g あたりの値を入れる。
+ *
+ * 「記録する」の無効化のうち、食べた時刻が空であることと送信中であることは
+ * 値が揃った状態でしか観測できない。値を持たない食材があるとボタンはその
+ * 条件だけで無効になり、他の条件の寄与が見えなくなる。
+ */
+async function runEstimate(estimates: readonly FoodEstimate[]) {
+  vi.mocked(estimateFoods).mockResolvedValue({ status: "success", estimates });
+  fireEvent.click(estimateButton());
+  await waitFor(() =>
+    expect(screen.queryAllByText("100g あたりの値がありません")).toHaveLength(
+      0,
+    ),
+  );
+}
+
 describe("RecordForm", () => {
   beforeEach(() => {
     vi.mocked(recordMeal).mockReset();
     vi.mocked(recordMeal).mockResolvedValue({ status: "idle" });
+    vi.mocked(estimateFoods).mockReset();
+    vi.mocked(estimateFoods).mockResolvedValue({ status: "idle" });
   });
 
   afterEach(() => {
@@ -299,6 +347,149 @@ describe("RecordForm", () => {
     // 悪いかを区別しない。送る前に止める。
     changeEatenAt("");
     expect(submitButton(container)).toBeDisabled();
+  });
+
+  it("「推定する」は食材が 0 件のときと、値を持たない食材が無いときは押せない", async () => {
+    render(<RecordForm />);
+
+    // 対象が 1 件も無いうちは推定するものがない（受入基準 4.4）
+    expect(estimateButton()).toBeDisabled();
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    expect(estimateButton()).toBeEnabled();
+
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    // すでに値を持つ食材は推定し直さない。押せる状態にしておくと通信が
+    // 無駄になり、利用者が直した値を上書きする道も開く（受入基準 3.4）
+    expect(estimateButton()).toBeDisabled();
+  });
+
+  it("「推定する」を押すと値を持たない食材の名前だけが受付に渡る", async () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+    addEntry({ name: "白米", grams: "200" });
+    await runEstimate([
+      { name: "白米", ok: true, kcalPer100g: 342, proteinPer100g: 6.1 },
+    ]);
+
+    expect(estimateFormData(0).getAll("name")).toEqual(["鶏もも"]);
+    // 2 回目は値を持つ鶏ももを含めない（受入基準 2.2）。含めると推定が
+    // 決まった値を上書きしうる
+    expect(estimateFormData(1).getAll("name")).toEqual(["白米"]);
+    // 量は送らない。推定が返すのは 100g あたりの値であり、量は画面が持つ
+    expect(estimateFormData(1).getAll("grams")).toEqual([]);
+    expect(estimateFormData(1).getAll("kcalPer100g")).toEqual([]);
+  });
+
+  it("推定中は推定していることを示し、推定と記録のいずれも受け付けない", async () => {
+    let finish: (state: EstimateState) => void = () => {};
+    vi.mocked(estimateFoods).mockImplementation(
+      () =>
+        new Promise<EstimateState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    fireEvent.click(estimateButton());
+
+    await waitFor(() => expect(estimateButton()).toHaveTextContent("推定中"));
+    // 重ねての推定を受け付けない（受入基準 4.2）
+    expect(estimateButton()).toBeDisabled();
+    // 推定中は記録も受け付けない（受入基準 4.3）
+    expect(submitButton(container)).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("推定中");
+
+    finish({ status: "success", estimates: [CHICKEN_ESTIMATE] });
+    await waitFor(() => expect(estimateButton()).toHaveTextContent("推定する"));
+  });
+
+  it("値が揃っていても推定中は記録を受け付けない", async () => {
+    let finish: (state: EstimateState) => void = () => {};
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    vi.mocked(estimateFoods).mockImplementation(
+      () =>
+        new Promise<EstimateState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    addEntry({ name: "白米", grams: "200" });
+    fireEvent.click(estimateButton());
+    await waitFor(() => expect(estimateButton()).toHaveTextContent("推定中"));
+
+    // 推定中に値を持たない食材を取り消す。値の不足が無くなるため、
+    // 「記録する」が無効である理由は推定中であることだけになる（受入基準 4.3）
+    fireEvent.click(screen.getAllByRole("button", { name: "取り消す" })[1]);
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(submitButton(container)).toBeDisabled();
+
+    // 未解決のまま残すと、後続のテストの更新が止まる
+    finish({ status: "success", estimates: [] });
+    await waitFor(() => expect(estimateButton()).toHaveTextContent("推定する"));
+  });
+
+  it("同じ食材名を 2 件加えても、それぞれの推定の結果が取り違わらない", async () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    addEntry({ name: "鶏もも", grams: "100" });
+    await runEstimate([
+      CHICKEN_ESTIMATE,
+      { name: "鶏もも", ok: true, kcalPer100g: 300, proteinPer100g: 20 },
+    ]);
+
+    // 結果は求めた順に返る。食材名で突き合わせると 2 件目に 1 件目の値が入る
+    expect(screen.getByText("570 kcal / タンパク質 50 g")).toBeInTheDocument();
+    expect(screen.getByText("300 kcal / タンパク質 20 g")).toBeInTheDocument();
+  });
+
+  it("値が揃っていても食べた時刻が空のときは記録を受け付けない", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    // 値が揃えば押せる。ここから先の無効化は時刻だけが理由になる
+    expect(submitButton(container)).toBeEnabled();
+
+    changeEatenAt("");
+    expect(submitButton(container)).toBeDisabled();
+  });
+
+  it("送信中は「記録する」が押せず、重ねての送信が受付に届かない", async () => {
+    let finish: (state: RecordState) => void = () => {};
+    vi.mocked(recordMeal).mockImplementation(
+      () =>
+        new Promise<RecordState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    fireEvent.click(submitButton(container));
+    await waitFor(() => expect(recordMeal).toHaveBeenCalledTimes(1));
+
+    expect(submitButton(container)).toBeDisabled();
+    // 重ねての送信を止めているのは disabled だけである（submit に送信中の
+    // ガードは無い）。2 回目を押しても受付に届かないことを確かめる
+    fireEvent.click(submitButton(container));
+    expect(recordMeal).toHaveBeenCalledTimes(1);
+
+    finish({ status: "success", fileName: "2026-10-11-1630.md" });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("記録しました"),
+    );
   });
 
   it("送信中は送信中であることを示し、送信を受け付けない状態にする", async () => {

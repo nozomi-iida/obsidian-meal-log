@@ -11,7 +11,7 @@ import {
 import { estimateMealKind } from "@/lib/meal-time";
 import { calculateItem, sumNutrition } from "@/lib/nutrition";
 import type { MealKind } from "@/lib/types";
-import { type RecordState, recordMeal } from "./actions";
+import { estimateFoods, type RecordState, recordMeal } from "./actions";
 
 /**
  * 下書き行の入力値。利用者が入力するのは食材名と量の 2 つだけである。
@@ -203,12 +203,22 @@ export function RecordForm() {
   const [kindChosen, setKindChosen] = useState(false);
   // 一覧の key に使う識別子。食材名は重複しうるため、加えた順の連番を振る。
   const nextId = useRef(0);
+  // 推定を求めた食材の識別子を、求めた順に持つ。結果は送った順に返るため、
+  // この並びと突き合わせてどの食材の結果かを決める。食材名で突き合わせると、
+  // 同じ名前の食材を 2 件加えたときに取り違える。
+  const estimateTargets = useRef<readonly number[]>([]);
   // 送信の結果と送信中かどうか。`pending` が送信中の表示と二重送信の防止を担う
   // （受入基準 5.1）。入力はこのフックの外の state にあるため、失敗しても
   // 結果が入れ替わるだけで破棄されない（受入基準 5.4）。
   const [submitResult, formAction, pending] = useActionState(recordMeal, {
     status: "idle",
   });
+  // 推定の結果と推定中かどうか。`estimating` が推定中の表示と、重ねての推定・
+  // 記録の抑止を担う（受入基準 4.1, 4.2, 4.3）。
+  const [estimateResult, estimateAction, estimating] = useActionState(
+    estimateFoods,
+    { status: "idle" },
+  );
 
   // 現在の時刻を食べた時刻の既定値にする（受入基準 3.1）。サーバー側で決めると
   // ホストのタイムゾーン（Vercel の既定は UTC）になるため、描画後にブラウザで決める。
@@ -239,6 +249,42 @@ export function RecordForm() {
     setKind(estimateMealKind(now));
     setKindChosen(false);
   }, [submitResult]);
+
+  // 推定の結果を食材ごとの 100g あたりの値として入れる。推定を求めた順に
+  // 返るため、求めたときに控えた識別子の並びと突き合わせる。
+  useEffect(() => {
+    if (estimateResult.status !== "success") {
+      return;
+    }
+    const estimates = estimateResult.estimates;
+    const targets = estimateTargets.current;
+    setEntries((current) =>
+      current.map((entry) => {
+        const index = targets.indexOf(entry.id);
+        const estimated = index === -1 ? undefined : estimates[index];
+        if (!estimated) {
+          return entry;
+        }
+        // 推定を求めてから結果が返るまでに値が決まった食材は上書きしない
+        // （受入基準 3.4）。対象を `per100g === null` の食材に限っているため
+        // 通常は起きないが、推定中に値が決まった場合に備える。
+        if (entry.per100g !== null || entry.edited) {
+          return entry;
+        }
+        if (!estimated.ok) {
+          return { ...entry, note: estimated.note };
+        }
+        return {
+          ...entry,
+          per100g: {
+            kcal: estimated.kcalPer100g,
+            protein: estimated.proteinPer100g,
+          },
+          note: null,
+        };
+      }),
+    );
+  }, [estimateResult]);
 
   // 栄養価を出せるのは 100g あたりの値を持つ食材だけである。値が無い食材は
   // 0 として数えない。0 kcal の食品（水、お茶）と区別がつかなくなり、
@@ -316,6 +362,47 @@ export function RecordForm() {
     startTransition(() => {
       formAction(formData);
     });
+  }
+
+  /**
+   * 推定を求める。対象は 100g あたりの値を持たない食材だけである（受入基準 2.2）。
+   *
+   * 「推定する」を `type="submit"` にしない。送信ボタンと 2 つ並ぶと、どちらを
+   * 押しても同じ `onSubmit` が起きて押されたボタンを区別できない。加えて推定に
+   * 送る項目は値を持たない食材の名前だけで、フォームが持つ項目とは一致しない。
+   * `FormData` をここで組めば、押されたボタンと送る内容が 1 対 1 で対応する。
+   *
+   * 量は送らない。推定が返すのは 100g あたりの値であり、量は画面が持つ。
+   */
+  function requestEstimate() {
+    const targets = entries.filter((entry) => entry.per100g === null);
+    if (targets.length === 0) {
+      return;
+    }
+    const formData = new FormData();
+    for (const target of targets) {
+      formData.append("name", target.name);
+    }
+    estimateTargets.current = targets.map((target) => target.id);
+    startTransition(() => {
+      estimateAction(formData);
+    });
+  }
+
+  /**
+   * 進行中であることと結果を 1 行で示す。
+   *
+   * 推定中・送信中を結果より先に示す。待っているあいだに前回の結果が
+   * 残っていると、押した操作が届いたのかが分からない。
+   */
+  function describeProgress(): string | null {
+    if (estimating) {
+      return "推定中です。";
+    }
+    if (pending) {
+      return "送信中です。";
+    }
+    return describeResult(submitResult);
   }
 
   function addEntry() {
@@ -487,6 +574,23 @@ export function RecordForm() {
             ))}
           </ul>
         )}
+        {/*
+          推定の対象は 100g あたりの値を持たない食材だけである（受入基準 2.2）。
+          対象が 0 件のときは押せない。食材が 1 件も無いときも値を持たない食材が
+          0 件になるため、この 1 つの条件に含まれる。すでに値を持つ食材を対象に
+          しないことで、利用者が直した値が推定で上書きされない（受入基準 3.4）。
+
+          推定中も押せない。重ねて押すと同じ食材の推定が二重に走る
+          （受入基準 4.2）。
+        */}
+        <button
+          className={BUTTON_CLASS}
+          type="button"
+          onClick={requestEstimate}
+          disabled={estimating || !hasMissingValue}
+        >
+          {estimating ? "推定中…" : "推定する"}
+        </button>
       </section>
 
       {/* 1 食で 3〜4 品入力するため、合計と送信は画面の下端に留めて常に見えるようにする。 */}
@@ -504,12 +608,19 @@ export function RecordForm() {
           100g あたりの値を持たない食材があるときも押せない（受入基準 4.5）。
           その食材の 2 項目は空で送られ、受付は送信全体を入力不正として弾く。
           押せる状態にしておくと、利用者には「入力が不正です」としか見えない。
+
+          推定中も押せない（受入基準 4.3）。推定の結果が返ると食材の値が
+          変わるため、待っているあいだの記録は利用者が見ていない値で作られる。
         */}
         <button
           className={BUTTON_CLASS}
           type="submit"
           disabled={
-            pending || entries.length === 0 || eatenAt === "" || hasMissingValue
+            pending ||
+            estimating ||
+            entries.length === 0 ||
+            eatenAt === "" ||
+            hasMissingValue
           }
         >
           {pending ? "送信中…" : "記録する"}
@@ -519,7 +630,7 @@ export function RecordForm() {
           後から現れた領域は読み上げられないことがあるためである。
         */}
         <p aria-live="polite" className="text-sm" role="status">
-          {pending ? "送信中です。" : describeResult(submitResult)}
+          {describeProgress()}
         </p>
       </section>
     </form>
