@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  startTransition,
+  useActionState,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { estimateMealKind } from "@/lib/meal-time";
 import { calculateItem, sumNutrition } from "@/lib/nutrition";
 import type { FoodInput, MealKind } from "@/lib/types";
+import { type RecordState, recordMeal } from "./actions";
 
 /**
  * 下書き行の入力値。
@@ -57,6 +65,29 @@ const FIELD_CLASS =
 
 const BUTTON_CLASS =
   "min-h-11 rounded border border-foreground/30 px-4 text-base";
+
+/** 送信の失敗の分類。送信の受付が返す分類をそのまま使う。 */
+type ErrorReason = Extract<RecordState, { status: "error" }>["reason"];
+
+/**
+ * 失敗の分類ごとに示す文面。利用者が次に何をすればよいかが分かる粒度で書く。
+ *
+ * 設定エラーで必要な変数名を画面側が静的な文面として持つのは、送信の受付の
+ * 戻り値に資格情報へ関わる情報を載せないためである（受入基準 6.3）。
+ */
+const ERROR_MESSAGES: Record<ErrorReason, string> = {
+  duplicate:
+    "その時刻の記録は既にあります。食べた時刻を変えてから送信してください。",
+  permission:
+    "vault への書き込みを拒否されました。アクセストークンの期限が切れていないか確認してください。",
+  network:
+    "vault に届きませんでした。入力は残してあるので、時間を置いてもう一度送信してください。",
+  config:
+    "書き込みの設定が足りていません。VAULT_OWNER / VAULT_REPO / VAULT_TOKEN を設定してください。",
+  invalid: "入力が不正です。食材・食べた時刻・食事区分を確かめてください。",
+  unauthorized:
+    "認証を通らなかったため記録していません。遮断点の適用範囲が壊れている可能性があります。",
+};
 
 /**
  * 入力された文字列を数値として読む。読めなければ null。
@@ -119,6 +150,22 @@ function readKind(value: string): MealKind | null {
 }
 
 /**
+ * 送信の結果を利用者に示す文面にする。まだ送信していなければ文面を持たない。
+ *
+ * 成功と失敗は文言で区別する。色だけに頼ると、色覚の多様性のもとで区別がつかない。
+ */
+function describeResult(state: RecordState): string | null {
+  switch (state.status) {
+    case "idle":
+      return null;
+    case "success":
+      return `記録しました。${state.fileName} を作成しました。`;
+    case "error":
+      return ERROR_MESSAGES[state.reason];
+  }
+}
+
+/**
  * 記録フォーム。食材を入力して記録の対象に加え、合計を示す。
  *
  * 合計は `nutrition` の関数を通して出す。送信の受付も同じ関数を通すため、
@@ -136,6 +183,12 @@ export function RecordForm() {
   const [kindChosen, setKindChosen] = useState(false);
   // 一覧の key に使う識別子。食材名は重複しうるため、加えた順の連番を振る。
   const nextId = useRef(0);
+  // 送信の結果と送信中かどうか。`pending` が送信中の表示と二重送信の防止を担う
+  // （受入基準 5.1）。入力はこのフックの外の state にあるため、失敗しても
+  // 結果が入れ替わるだけで破棄されない（受入基準 5.4）。
+  const [submitResult, formAction, pending] = useActionState(recordMeal, {
+    status: "idle",
+  });
 
   // 現在の時刻を食べた時刻の既定値にする（受入基準 3.1）。サーバー側で決めると
   // ホストのタイムゾーン（Vercel の既定は UTC）になるため、描画後にブラウザで決める。
@@ -188,6 +241,27 @@ export function RecordForm() {
     setKindChosen(true);
   }
 
+  /**
+   * 送信する。受付へは `<form action={formAction}>` ではなくここから渡す。
+   *
+   * `action` に関数を渡すと、React は送信のあと `form.reset()` を呼ぶ。制御して
+   * いない料理名の欄は空に戻り、食事区分の `select` は最初の選択肢に戻る。
+   * `select` は `value` で制御しているのに戻らない。送信の結果で再描画は起きる
+   * が、`value` が前回の描画と同じ値なので React は DOM に書き直さないためで
+   * ある。表示と送られる値が食い違ったまま残り、失敗してやり直すと利用者が
+   * 選んだ区分ではなく「朝」で記録される。失敗しても入力を破棄しないために
+   * （受入基準 5.4）、リセットを伴わない経路で受付へ渡す。
+   *
+   * 送信中であることは `useActionState` の `pending` が引き続き担う。
+   */
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    startTransition(() => {
+      formAction(formData);
+    });
+  }
+
   function addFood() {
     const result = readDraft(draft);
     if (!result.ok) {
@@ -206,7 +280,7 @@ export function RecordForm() {
   }
 
   return (
-    <form className="flex flex-1 flex-col gap-6 px-4 py-6">
+    <form onSubmit={submit} className="flex flex-1 flex-col gap-6 px-4 py-6">
       <h1 className="text-xl font-semibold">食事を記録する</h1>
 
       <fieldset className="flex flex-col gap-3">
@@ -365,11 +439,31 @@ export function RecordForm() {
         )}
       </section>
 
-      {/* 1 食で 3〜4 品入力するため、合計は画面の下端に留めて常に見えるようにする。 */}
-      <section className="sticky bottom-0 mt-auto border-t border-foreground/20 bg-background py-3">
+      {/* 1 食で 3〜4 品入力するため、合計と送信は画面の下端に留めて常に見えるようにする。 */}
+      <section className="sticky bottom-0 mt-auto flex flex-col gap-2 border-t border-foreground/20 bg-background py-3">
         <h2 className="text-sm font-medium">合計</h2>
         <p className="text-2xl font-semibold">
           {total.kcal} kcal / タンパク質 {total.protein} g
+        </p>
+        {/*
+          送信中は押せない状態にする。重ねて送ると 2 回目は同じ名前のファイルを
+          作ろうとして重複になる（受入基準 5.1）。対象が 1 件も無いときも押せない
+          （受入基準 1.6）。食べた時刻が空のときも押せないのは、そのまま送ると
+          受付が入力不正を返すものの、その理由はどの欄が悪いかを区別しないためである。
+        */}
+        <button
+          className={BUTTON_CLASS}
+          type="submit"
+          disabled={pending || entries.length === 0 || eatenAt === ""}
+        >
+          {pending ? "送信中…" : "記録する"}
+        </button>
+        {/*
+          結果は読み上げられる領域に出す。文面が無いうちから領域を置いておくのは、
+          後から現れた領域は読み上げられないことがあるためである。
+        */}
+        <p aria-live="polite" className="text-sm" role="status">
+          {pending ? "送信中です。" : describeResult(submitResult)}
         </p>
       </section>
     </form>

@@ -616,6 +616,7 @@ export function recordMeal(
 **Implementation Notes**
 
 - Integration: `useActionState(recordMeal, { status: "idle" })` で `[state, formAction, pending]` を得る
+- **`<form action={formAction}>` を使わない**: `action` に関数を渡すと React は送信のあと `form.reset()` を呼ぶ。制御していない欄は空に戻り、`<select>` は **`value` で制御していても先頭の選択肢に戻ったまま復元されない**（送信の結果で再描画は起きるが、`value` が前回の描画と同値なので React が DOM に書き直さないため）。表示と送られる値が食い違い、やり直すと利用者の指定ではない区分で記録される。**受入基準 5.4 を守るため、`onSubmit` で `FormData` を組み、`startTransition` の中で `formAction` を呼ぶ。** すべての入力を制御下に置く方式でも、`<select>` が同じ機構で壊れるため解決しない
 - **送信データの項目名**: 食材ごとに `name` / `kcalPer100g` / `proteinPer100g` / `grams` を**同じ名前で繰り返す**。単一項目として `eatenAt`（`YYYY-MM-DDTHH:mm`）/ `kind` / `dish` を送る。記録の受付は 4 つの繰り返し項目の**長さが一致していること**を確かめるため、確定した食材の数だけ 4 本組を並べる
 - **下書き行に項目名を付けない**: 「これから加える 1 件」の入力欄に上記の項目名を付けると、未入力のまま送信したときに 4 つの配列に空の要素が増え、**確定済みの食材が正しくても送信全体が入力不正になる**。下書きはクライアントの状態だけで持ち、送信する項目には含めない
 - **日時の入力**: `<input type="datetime-local">` を使う。この入力欄の値は `2026-10-11T19:00` のように**タイムゾーン情報を持たない文字列**であり、そのまま送信すればサーバー側で解釈する必要がなくなる
