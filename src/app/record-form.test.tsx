@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FoodEstimate } from "@/lib/types";
 import {
@@ -98,6 +104,23 @@ function submittedFormData(): FormData {
   return call[1];
 }
 
+/**
+ * 一覧から食材 1 件の行を引く。
+ *
+ * 値や理由は行に限定して検査する。画面全体から文面を探すと、一覧の外に
+ * 食材名なしで並べても検査が通ってしまい、「どの食材か」が示されていること
+ * （受入基準 5.1）を主張できない。
+ */
+function listItemFor(label: string): HTMLElement {
+  const found = screen
+    .getAllByRole("listitem")
+    .find((item) => item.textContent?.includes(label));
+  if (!found) {
+    throw new Error(`${label} の行が見つからない`);
+  }
+  return found;
+}
+
 /** 「推定する」ボタン。推定中は文面が変わるため、文面の一部で引く。 */
 function estimateButton(): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", { name: /推定/ });
@@ -126,6 +149,40 @@ async function runEstimate(estimates: readonly FoodEstimate[]) {
     expect(screen.queryAllByText("100g あたりの値がありません")).toHaveLength(
       0,
     ),
+  );
+}
+
+/**
+ * 推定を 1 往復させて失敗させ、status 行に出た文面を確かめる。
+ *
+ * 文面の一部で待つのは、失敗が画面に出るまで待つ手段が文面しかないためである。
+ * 推定中の表示は押した直後に出るため、待つ対象にできない。
+ */
+async function expectEstimateFailure(
+  reason: Extract<EstimateState, { status: "error" }>["reason"],
+  expected: string,
+) {
+  vi.mocked(estimateFoods).mockResolvedValue({ status: "error", reason });
+  fireEvent.click(estimateButton());
+  await waitFor(() =>
+    expect(screen.getByRole("status")).toHaveTextContent(expected),
+  );
+}
+
+/**
+ * 記録を 1 往復させて成功させる。値が揃った食材 1 件を加えた状態から呼ぶ。
+ *
+ * 入力が初期状態に戻るまで待つ。結果の文面だけを待つと、戻る前の状態を
+ * 見てしまうことがある。
+ */
+async function runSuccessfulRecord(container: HTMLElement) {
+  vi.mocked(recordMeal).mockResolvedValue({
+    status: "success",
+    fileName: "2026-10-11-1630.md",
+  });
+  fireEvent.click(submitButton(container));
+  await waitFor(() =>
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0),
   );
 }
 
@@ -446,9 +503,20 @@ describe("RecordForm", () => {
       { name: "鶏もも", ok: true, kcalPer100g: 300, proteinPer100g: 20 },
     ]);
 
-    // 結果は求めた順に返る。食材名で突き合わせると 2 件目に 1 件目の値が入る
-    expect(screen.getByText("570 kcal / タンパク質 50 g")).toBeInTheDocument();
-    expect(screen.getByText("300 kcal / タンパク質 20 g")).toBeInTheDocument();
+    // 結果は求めた順に返る。食材名で突き合わせると 2 件目に 1 件目の値が入る。
+    // 量が違うため、取り違えると換算後の値も 100g あたりの値も入れ替わる
+    const first = listItemFor("鶏もも 300g");
+    const second = listItemFor("鶏もも 100g");
+    expect(
+      within(first).getByText(
+        "100g あたり 190 kcal / タンパク質 16.6 g → 570 kcal / タンパク質 50 g",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(second).getByText(
+        "100g あたり 300 kcal / タンパク質 20 g → 300 kcal / タンパク質 20 g",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("値が揃っていても食べた時刻が空のときは記録を受け付けない", async () => {
@@ -680,5 +748,140 @@ describe("RecordForm", () => {
     // 時刻を変えても前回選んだ区分が残り続ける（受入基準 3.3 が効かない）
     changeEatenAt("2026-01-05T19:00");
     expect(screen.getByLabelText("食事区分")).toHaveValue("夜");
+  });
+
+  // 失敗の分類ごとに、利用者が次に何をすればよいかが分かる語を含むこと。
+  // 分類の網羅は型（`Record<分類, string>`）が強制するが、文面が対処を
+  // 示しているかは型からは分からない。
+  it.each([
+    ["network", "時間を置いて"],
+    ["credential", "開発者に伝えて"],
+    ["malformed", "もう一度"],
+    ["config", "ANTHROPIC_API_KEY"],
+    ["invalid", "食材名"],
+    ["unauthorized", "遮断点"],
+  ] as const)(
+    "推定が %s で失敗したときは対処が分かる文面を示す",
+    async (reason, expected) => {
+      render(<RecordForm />);
+
+      addEntry({ name: "鶏もも", grams: "300" });
+      await expectEstimateFailure(reason, expected);
+
+      // 失敗しても入力した内容を破棄せず、やり直せる状態を保つ（受入基準 5.4）
+      expect(screen.getByText("鶏もも 300g")).toBeInTheDocument();
+    },
+  );
+
+  it("推定の資格情報が不足しているときは変数名を画面側が示す", async () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    // 戻り値は変数名を持たない（資格情報に関わる情報を載せないため）。
+    // 画面側が静的な文面として持つ（受入基準 6.3）
+    await expectEstimateFailure("config", "ANTHROPIC_API_KEY");
+  });
+
+  it("推定が終わると 100g あたりの値・食材ごとの値・合計の 3 つを示す", async () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    const row = listItemFor("鶏もも 300g");
+    // 100g あたりの値を示す（受入基準 2.7）。推定の品質が落ちたことに気づく
+    // 手段は利用者が値を見ることだけである。送信の項目にしか無い状態では、
+    // 1 桁ずれた値でも換算後の数字からは見分けられない
+    expect(within(row).getByText(/100g あたり 190 kcal/)).toBeInTheDocument();
+    expect(within(row).getByText(/タンパク質 16\.6 g/)).toBeInTheDocument();
+    // 食材ごとの換算後の値も同じ行に示す
+    expect(
+      within(row).getByText(/570 kcal \/ タンパク質 50 g/),
+    ).toBeInTheDocument();
+    // 合計は一覧の外に出す。食材が 1 件のときは同じ数字になるため、行の中と
+    // 区別して引く
+    expect(screen.getByText("570 kcal / タンパク質 50 g")).toBeInTheDocument();
+  });
+
+  it("一部だけ推定できなかったとき、理由を示し、推定できた食材の値を残す", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    addEntry({ name: "肉", grams: "100" });
+    addEntry({ name: "白米", grams: "200" });
+    vi.mocked(estimateFoods).mockResolvedValue({
+      status: "success",
+      estimates: [
+        CHICKEN_ESTIMATE,
+        // 理由の文面に食材名を含めない。含めると、理由を食材名と同じ行に
+        // 置かず画面のどこかに並べただけでも検査が通ってしまう
+        { name: "肉", ok: false, note: "部位や種類が特定できない" },
+        { name: "白米", ok: true, kcalPer100g: 342, proteinPer100g: 6.1 },
+      ],
+    });
+    fireEvent.click(estimateButton());
+
+    // どの食材が推定できなかったかと、モデルが返した理由をそのまま示す
+    // （受入基準 5.1）。理由はその食材の行の中にあること
+    await waitFor(() =>
+      expect(
+        within(listItemFor("肉 100g")).getByText(
+          "推定できませんでした。部位や種類が特定できない",
+        ),
+      ).toBeInTheDocument(),
+    );
+
+    // 1 件の失敗で推定できた食材の値を失わない（受入基準 5.5）
+    expect(
+      within(listItemFor("鶏もも 300g")).getByText(
+        "100g あたり 190 kcal / タンパク質 16.6 g → 570 kcal / タンパク質 50 g",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(listItemFor("白米 200g")).getByText(
+        "100g あたり 342 kcal / タンパク質 6.1 g → 684 kcal / タンパク質 12 g",
+      ),
+    ).toBeInTheDocument();
+    // 合計は値を持つ食材だけの和である。推定できなかった食材を 0 として数えない
+    expect(screen.getByText("1254 kcal / タンパク質 62 g")).toBeInTheDocument();
+    // 値が揃っていない食材が残るため記録は受け付けない（受入基準 4.5）
+    expect(submitButton(container)).toBeDisabled();
+    // 件数も読み上げられる領域に出す。一覧を見ない利用者にも失敗が届くように
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "1 件は推定できませんでした",
+    );
+  });
+
+  it("記録に成功したあとに推定が失敗すると、記録の結果が残らない", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+    await runSuccessfulRecord(container);
+    expect(screen.getByRole("status")).toHaveTextContent("記録しました");
+
+    addEntry({ name: "肉", grams: "100" });
+    await expectEstimateFailure("network", "時間を置いて");
+
+    // 記録の結果が残ると、推定の失敗が成功のように見える
+    expect(screen.getByRole("status")).not.toHaveTextContent("記録しました");
+  });
+
+  it("記録に成功したあとに推定が成功すると、記録の結果が残らない", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+    await runSuccessfulRecord(container);
+    expect(screen.getByRole("status")).toHaveTextContent("記録しました");
+
+    addEntry({ name: "白米", grams: "200" });
+    await runEstimate([
+      { name: "白米", ok: true, kcalPer100g: 342, proteinPer100g: 6.1 },
+    ]);
+
+    // 示す結果は常に最後に押したボタンのものである
+    expect(screen.getByRole("status")).toHaveTextContent("推定しました");
+    expect(screen.getByRole("status")).not.toHaveTextContent("記録しました");
   });
 });

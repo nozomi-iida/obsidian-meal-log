@@ -10,8 +10,13 @@ import {
 } from "react";
 import { estimateMealKind } from "@/lib/meal-time";
 import { calculateItem, sumNutrition } from "@/lib/nutrition";
-import type { MealKind } from "@/lib/types";
-import { estimateFoods, type RecordState, recordMeal } from "./actions";
+import type { MealItem, MealKind } from "@/lib/types";
+import {
+  type EstimateState,
+  estimateFoods,
+  type RecordState,
+  recordMeal,
+} from "./actions";
 
 /**
  * 下書き行の入力値。利用者が入力するのは食材名と量の 2 つだけである。
@@ -50,6 +55,26 @@ type Entry = {
   /** 100g あたりの値が決まらなかった理由。利用者に示す。 */
   readonly note: string | null;
 };
+
+/**
+ * 一覧に出す 1 行。食材と、量に合わせて算出した栄養価を持つ。
+ *
+ * 100g あたりの値を持たない食材の `item` は null になる。
+ */
+type Row = {
+  readonly entry: Entry;
+  readonly item: MealItem | null;
+};
+
+/**
+ * 直前に始めた操作。記録と推定のどちらの結果を示すかを決めるために持つ。
+ *
+ * 結果を出す領域は 1 つで、`useActionState` の結果は次の操作が終わるまで残る。
+ * これだけでは、記録に成功したあとに推定が失敗したとき「記録しました。…」が
+ * 残り、失敗が成功のように見える。新しい操作を始めた時点で示す対象を
+ * そちらへ移すと、見えている結果が常に最後に押したボタンのものになる。
+ */
+type Operation = "record" | "estimate";
 
 /** 下書きを読んだ結果。不正なときは利用者に示す文面を持つ。 */
 type DraftResult =
@@ -99,6 +124,35 @@ const ERROR_MESSAGES: Record<ErrorReason, string> = {
   invalid: "入力が不正です。食材・食べた時刻・食事区分を確かめてください。",
   unauthorized:
     "認証を通らなかったため記録していません。遮断点の適用範囲が壊れている可能性があります。",
+};
+
+/** 推定の失敗の分類。推定の受付が返す分類をそのまま使う。 */
+type EstimateErrorReason = Extract<
+  EstimateState,
+  { status: "error" }
+>["reason"];
+
+/**
+ * 推定の失敗の分類ごとに示す文面。
+ *
+ * 分類ごとに対処が違う（受入基準 5.6）。通信なら時間を置けば直るが、資格情報が
+ * 原因なら利用者が何度やり直しても直らない。ひとまとめにすると、再送で済む
+ * 失敗で手入力に走ったり、直らない失敗を繰り返し試したりすることになる。
+ *
+ * 設定の不足で必要な変数名を画面側が静的な文面として持つのは、推定の受付の
+ * 戻り値に資格情報へ関わる情報を載せないためである（受入基準 6.3）。
+ */
+const ESTIMATE_ERROR_MESSAGES: Record<EstimateErrorReason, string> = {
+  network:
+    "推定に届きませんでした。入力は残してあるので、時間を置いてもう一度「推定する」を押してください。",
+  credential:
+    "推定の資格情報が受け付けられませんでした。やり直しても直らないため、開発者に伝えてください。",
+  malformed:
+    "推定の応答が期待した形ではありませんでした。もう一度「推定する」を押してください。",
+  config: "推定の設定が足りていません。ANTHROPIC_API_KEY を設定してください。",
+  invalid: "推定を求めた内容が不正です。食材名を確かめてください。",
+  unauthorized:
+    "認証を通らなかったため推定していません。遮断点の適用範囲が壊れている可能性があります。",
 };
 
 /**
@@ -185,6 +239,58 @@ function describeResult(state: RecordState): string | null {
 }
 
 /**
+ * 推定の結果を利用者に示す文面にする。まだ推定していなければ文面を持たない。
+ *
+ * 成功しても文面を出すのは、読み上げられる領域にも推定の終わりを伝えるため
+ * である。値そのものは一覧と合計に出るが、それだけでは画面を見ない利用者に
+ * 届かない。
+ *
+ * 推定できなかった食材があるときは件数を添える。どの食材かと理由は一覧の
+ * その食材の行に出る（受入基準 5.1）。
+ */
+function describeEstimateResult(state: EstimateState): string | null {
+  switch (state.status) {
+    case "idle":
+      return null;
+    case "success": {
+      const failed = state.estimates.filter((estimate) => !estimate.ok).length;
+      if (failed === 0) {
+        return "推定しました。";
+      }
+      return `推定しました。${failed} 件は推定できませんでした。`;
+    }
+    case "error":
+      return ESTIMATE_ERROR_MESSAGES[state.reason];
+  }
+}
+
+/**
+ * 食材 1 件の栄養価を示す文面。
+ *
+ * **100g あたりの値も示す**（受入基準 2.7）。送信の項目にしか持たない状態では、
+ * 推定が 1 桁ずれた値を返しても換算後の数字からは見分けられない。推定の品質が
+ * 落ちたことに気づく手段は利用者が値を見ることだけなので、根拠になる値を
+ * 画面に出す。4.4 で修正の入力欄に置き換わる。
+ *
+ * 値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で示す。推定が
+ * できなかった食材には、モデルが返した理由（`note`）をそのまま添える。どの
+ * 食材かは同じ行に食材名が並ぶことで分かる（受入基準 5.1）。
+ */
+function describeRow(row: Row): string {
+  const per100g = row.entry.per100g;
+  // `item` が値を持つのは `per100g` が値を持つときだけだが、`Row` の型は
+  // その関係を表せないため両方を絞り込む。
+  if (per100g !== null && row.item !== null) {
+    const per100gText = `100g あたり ${per100g.kcal} kcal / タンパク質 ${per100g.protein} g`;
+    return `${per100gText} → ${row.item.kcal} kcal / タンパク質 ${row.item.protein} g`;
+  }
+  if (row.entry.note !== null) {
+    return `推定できませんでした。${row.entry.note}`;
+  }
+  return "100g あたりの値がありません";
+}
+
+/**
  * 記録フォーム。食材を入力して記録の対象に加え、合計を示す。
  *
  * 合計は `nutrition` の関数を通して出す。送信の受付も同じ関数を通すため、
@@ -201,6 +307,9 @@ export function RecordForm() {
   // （受入基準 3.4）。深夜 1 時の食事を「寝る前」に直したあと時刻を 0:30 に
   // 直しても、選んだ指定が残るようにする。
   const [kindChosen, setKindChosen] = useState(false);
+  // 最後に始めた操作。どちらの結果を示すかを決める。まだ何も押していない
+  // あいだは null で、結果の領域は空になる。
+  const [operation, setOperation] = useState<Operation | null>(null);
   // 一覧の key に使う識別子。食材名は重複しうるため、加えた順の連番を振る。
   const nextId = useRef(0);
   // 推定を求めた食材の識別子を、求めた順に持つ。結果は送った順に返るため、
@@ -289,7 +398,7 @@ export function RecordForm() {
   // 栄養価を出せるのは 100g あたりの値を持つ食材だけである。値が無い食材は
   // 0 として数えない。0 kcal の食品（水、お茶）と区別がつかなくなり、
   // 合計が「値が揃っている」ように見えてしまう。
-  const rows = entries.map((entry) => ({
+  const rows: readonly Row[] = entries.map((entry) => ({
     entry,
     item:
       entry.per100g === null
@@ -359,6 +468,7 @@ export function RecordForm() {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    setOperation("record");
     startTransition(() => {
       formAction(formData);
     });
@@ -384,6 +494,7 @@ export function RecordForm() {
       formData.append("name", target.name);
     }
     estimateTargets.current = targets.map((target) => target.id);
+    setOperation("estimate");
     startTransition(() => {
       estimateAction(formData);
     });
@@ -394,6 +505,10 @@ export function RecordForm() {
    *
    * 推定中・送信中を結果より先に示す。待っているあいだに前回の結果が
    * 残っていると、押した操作が届いたのかが分からない。
+   *
+   * 結果は最後に始めた操作のものだけを示す。記録の結果を示したまま推定の
+   * 失敗を無視すると「押しても何も起きない」ように見え、逆に記録の成功を
+   * 残したまま推定が失敗すると失敗が成功のように見える。
    */
   function describeProgress(): string | null {
     if (estimating) {
@@ -402,7 +517,14 @@ export function RecordForm() {
     if (pending) {
       return "送信中です。";
     }
-    return describeResult(submitResult);
+    switch (operation) {
+      case null:
+        return null;
+      case "record":
+        return describeResult(submitResult);
+      case "estimate":
+        return describeEstimateResult(estimateResult);
+    }
   }
 
   function addEntry() {
@@ -555,14 +677,11 @@ export function RecordForm() {
                 <span className="font-medium">
                   {row.entry.name} {row.entry.grams}g
                 </span>
-                {/* 値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で示す。 */}
-                {row.item === null ? (
-                  <span className="text-sm">100g あたりの値がありません</span>
-                ) : (
-                  <span className="text-sm">
-                    {row.item.kcal} kcal / タンパク質 {row.item.protein} g
-                  </span>
-                )}
+                {/*
+                  値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で
+                  示す。推定できなかった食材には理由を添える（受入基準 5.1）。
+                */}
+                <span className="text-sm">{describeRow(row)}</span>
                 <button
                   className={BUTTON_CLASS}
                   type="button"
