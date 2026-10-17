@@ -38,19 +38,36 @@ const EMPTY_DRAFT: Draft = {
 };
 
 /**
+ * 100g あたりの値の入力欄。推定した値が入り、利用者が直せる。
+ *
+ * 数値の欄も文字列のまま持つ。入力途中は数値として読めない状態を通るため、
+ * 数値へ変換するのは栄養価を算出するときだけにする。
+ */
+type Per100gInput = {
+  readonly kcal: string;
+  readonly protein: string;
+};
+
+const EMPTY_PER100G: Per100gInput = {
+  kcal: "",
+  protein: "",
+};
+
+/**
  * 記録の対象に加えた食材 1 件。一覧の key に使う識別子を添える。
  *
- * `per100g` が null のあいだは 100g あたりの値を持たない。加えた直後は必ず
+ * `per100g` の欄が空のあいだは 100g あたりの値を持たない。加えた直後は必ず
  * この状態になる。値が無い食材があるうちは記録を受け付けない（受入基準 4.5）。
  *
  * `edited` は利用者が自ら値を決めたことの印である。`meal-record` の
- * `kindChosen`（利用者が食事区分を選んだか）と同じ役割を持つ。
+ * `kindChosen`（利用者が食事区分を選んだか）と同じ役割を持つ。立っている食材は
+ * 推定の対象に入らず、推定の結果でも上書きしない（受入基準 3.4）。
  */
 type Entry = {
   readonly id: number;
   readonly name: string;
   readonly grams: number;
-  readonly per100g: { readonly kcal: number; readonly protein: number } | null;
+  readonly per100g: Per100gInput;
   readonly edited: boolean;
   /** 100g あたりの値が決まらなかった理由。利用者に示す。 */
   readonly note: string | null;
@@ -59,7 +76,8 @@ type Entry = {
 /**
  * 一覧に出す 1 行。食材と、量に合わせて算出した栄養価を持つ。
  *
- * 100g あたりの値を持たない食材の `item` は null になる。
+ * 100g あたりの値を数値として読めない食材の `item` は null になる。欄が
+ * 空のときと、入力が数値として読めないときの両方を含む。
  */
 type Row = {
   readonly entry: Entry;
@@ -175,12 +193,46 @@ function parseNumber(value: string): number | null {
 }
 
 /**
+ * 入力欄の 2 つの値を 100g あたりの値として読む。片方でも読めなければ null。
+ *
+ * 片方だけで栄養価を出さない。カロリーだけで算出すると、タンパク質が 0 の
+ * 記録が「値が揃っている」ように見える。
+ */
+function readPer100g(
+  input: Per100gInput,
+): { readonly kcal: number; readonly protein: number } | null {
+  const kcal = parseNumber(input.kcal);
+  const protein = parseNumber(input.protein);
+  if (kcal === null || protein === null) {
+    return null;
+  }
+  return { kcal, protein };
+}
+
+/** 100g あたりの欄に入力があるか。未入力と、読めない入力を分けるために見る。 */
+function hasPer100gInput(input: Per100gInput): boolean {
+  return input.kcal.trim() !== "" || input.protein.trim() !== "";
+}
+
+/**
+ * 推定の対象になる食材か。
+ *
+ * 対象は 100g あたりの値を持たず、かつ利用者が値を決めていない食材だけである。
+ * すでに値を持つ食材を外すのは、推定由来の値でも再推定しないためである。
+ * 利用者が決めた食材を外すのは、直した値が推定で上書きされないようにするため
+ * である（受入基準 3.4）。**条件分岐で上書きを防ぐのではなく、対象に入れない。**
+ */
+function needsEstimate(entry: Entry): boolean {
+  return readPer100g(entry.per100g) === null && !entry.edited;
+}
+
+/**
  * 下書きを確定した食材として読む。1 項目でも不正なら理由を返す。
  *
  * 送信の受付（`actions.ts`）と同じ条件で弾く。検証が二重になるが、
  * 画面側で弾くほうが利用者に早く伝わる。
  *
- * 読めた食材は 100g あたりの値を持たない状態で返す。値は推定で埋まる。
+ * 読めた食材は 100g あたりの値を持たない状態で返す。値は推定か手入力で埋まる。
  */
 function readDraft(draft: Draft): DraftResult {
   const name = draft.name.trim();
@@ -196,7 +248,7 @@ function readDraft(draft: Draft): DraftResult {
   }
   return {
     ok: true,
-    entry: { name, grams, per100g: null, edited: false, note: null },
+    entry: { name, grams, per100g: EMPTY_PER100G, edited: false, note: null },
   };
 }
 
@@ -265,24 +317,24 @@ function describeEstimateResult(state: EstimateState): string | null {
 }
 
 /**
- * 食材 1 件の栄養価を示す文面。
+ * 食材 1 件の栄養価を示す文面。量に合わせて換算した値を出す。
  *
- * **100g あたりの値も示す**（受入基準 2.7）。送信の項目にしか持たない状態では、
- * 推定が 1 桁ずれた値を返しても換算後の数字からは見分けられない。推定の品質が
- * 落ちたことに気づく手段は利用者が値を見ることだけなので、根拠になる値を
- * 画面に出す。4.4 で修正の入力欄に置き換わる。
+ * **100g あたりの値は修正の入力欄が示す**（受入基準 2.7, 3.1）。送信の項目に
+ * しか持たない状態では、推定が 1 桁ずれた値を返しても換算後の数字からは
+ * 見分けられない。推定の品質が落ちたことに気づく手段は利用者が値を見ること
+ * だけなので、根拠になる値を欄に出し、そのまま直せるようにする。
  *
- * 値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で示す。推定が
- * できなかった食材には、モデルが返した理由（`note`）をそのまま添える。どの
- * 食材かは同じ行に食材名が並ぶことで分かる（受入基準 5.1）。
+ * 値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で示す。欄に
+ * 入力があるのに読めないときは、値が無いのではなく入力が不正であることを示す
+ * （受入基準 3.5）。推定ができなかった食材には、モデルが返した理由（`note`）を
+ * そのまま添える。どの食材かは同じ行に食材名が並ぶことで分かる（受入基準 5.1）。
  */
 function describeRow(row: Row): string {
-  const per100g = row.entry.per100g;
-  // `item` が値を持つのは `per100g` が値を持つときだけだが、`Row` の型は
-  // その関係を表せないため両方を絞り込む。
-  if (per100g !== null && row.item !== null) {
-    const per100gText = `100g あたり ${per100g.kcal} kcal / タンパク質 ${per100g.protein} g`;
-    return `${per100gText} → ${row.item.kcal} kcal / タンパク質 ${row.item.protein} g`;
+  if (row.item !== null) {
+    return `この量で ${row.item.kcal} kcal / タンパク質 ${row.item.protein} g`;
+  }
+  if (hasPer100gInput(row.entry.per100g)) {
+    return "100g あたりの値は 0 以上の数値で入力してください。";
   }
   if (row.entry.note !== null) {
     return `推定できませんでした。${row.entry.note}`;
@@ -374,10 +426,10 @@ export function RecordForm() {
         if (!estimated) {
           return entry;
         }
-        // 推定を求めてから結果が返るまでに値が決まった食材は上書きしない
-        // （受入基準 3.4）。対象を `per100g === null` の食材に限っているため
-        // 通常は起きないが、推定中に値が決まった場合に備える。
-        if (entry.per100g !== null || entry.edited) {
+        // 利用者が自ら値を決めた食材は上書きしない（受入基準 3.4）。対象を
+        // 利用者が決めていない食材に限っているため、推定を求めてから結果が
+        // 返るまでに値を直した食材だけがここに来る。
+        if (entry.edited) {
           return entry;
         }
         if (!estimated.ok) {
@@ -386,8 +438,8 @@ export function RecordForm() {
         return {
           ...entry,
           per100g: {
-            kcal: estimated.kcalPer100g,
-            protein: estimated.proteinPer100g,
+            kcal: String(estimated.kcalPer100g),
+            protein: String(estimated.proteinPer100g),
           },
           note: null,
         };
@@ -398,24 +450,52 @@ export function RecordForm() {
   // 栄養価を出せるのは 100g あたりの値を持つ食材だけである。値が無い食材は
   // 0 として数えない。0 kcal の食品（水、お茶）と区別がつかなくなり、
   // 合計が「値が揃っている」ように見えてしまう。
-  const rows: readonly Row[] = entries.map((entry) => ({
-    entry,
-    item:
-      entry.per100g === null
-        ? null
-        : calculateItem({
-            name: entry.name,
-            kcalPer100g: entry.per100g.kcal,
-            proteinPer100g: entry.per100g.protein,
-            grams: entry.grams,
-          }),
-  }));
+  const rows: readonly Row[] = entries.map((entry) => {
+    const per100g = readPer100g(entry.per100g);
+    return {
+      entry,
+      item:
+        per100g === null
+          ? null
+          : calculateItem({
+              name: entry.name,
+              kcalPer100g: per100g.kcal,
+              proteinPer100g: per100g.protein,
+              grams: entry.grams,
+            }),
+    };
+  });
   const total = sumNutrition(
     rows.flatMap((row) => (row.item === null ? [] : [row.item])),
   );
-  // 100g あたりの値を持たない食材が 1 件でもあるか。記録を受け付けない条件に使う
-  // （受入基準 4.5）。
-  const hasMissingValue = entries.some((entry) => entry.per100g === null);
+  // 100g あたりの値を数値として読めない食材が 1 件でもあるか。記録を受け付けない
+  // 条件に使う（受入基準 4.5）。欄が空の食材と、修正した値が不正な食材の両方を
+  // 含む（受入基準 3.5）。
+  const hasMissingValue = rows.some((row) => row.item === null);
+  // 推定の対象になる食材。「推定する」を押せるかの判定と、押したときに送る
+  // 食材を同じ条件から出す。食い違うと押せるのに何も起きない状態になる。
+  const estimateTargetEntries = entries.filter(needsEstimate);
+
+  /**
+   * 100g あたりの値を直す（受入基準 3.1）。直した食材には `edited` を立てる。
+   *
+   * `edited` は利用者が自ら値を決めたことの印であり、その食材を推定の対象から
+   * 外す。立てないと、食材を足して推定し直したときに直した値が推定の値に戻る
+   * （受入基準 3.4）。
+   */
+  function changePer100g(id: number, field: keyof Per100gInput, value: string) {
+    setEntries((current) =>
+      current.map((entry) =>
+        entry.id === id
+          ? {
+              ...entry,
+              per100g: { ...entry.per100g, [field]: value },
+              edited: true,
+            }
+          : entry,
+      ),
+    );
+  }
 
   function updateDraft(field: keyof Draft, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -475,7 +555,8 @@ export function RecordForm() {
   }
 
   /**
-   * 推定を求める。対象は 100g あたりの値を持たない食材だけである（受入基準 2.2）。
+   * 推定を求める。対象は 100g あたりの値を持たず、利用者が値を決めていない
+   * 食材だけである（受入基準 2.2, 3.4）。
    *
    * 「推定する」を `type="submit"` にしない。送信ボタンと 2 つ並ぶと、どちらを
    * 押しても同じ `onSubmit` が起きて押されたボタンを区別できない。加えて推定に
@@ -485,7 +566,7 @@ export function RecordForm() {
    * 量は送らない。推定が返すのは 100g あたりの値であり、量は画面が持つ。
    */
   function requestEstimate() {
-    const targets = entries.filter((entry) => entry.per100g === null);
+    const targets = estimateTargetEntries;
     if (targets.length === 0) {
       return;
     }
@@ -655,31 +736,77 @@ export function RecordForm() {
                   確定した食材だけを 4 本組の項目として送る。確定した数だけ並ぶため、
                   4 つの繰り返し項目の長さは構造上必ず一致する。
 
-                  100g あたりの値を持たない食材も 4 項目すべてを並べ、値の無い
-                  2 項目は空で送る。項目を省くと長さの一致が崩れて別の食材の値が
-                  隣にずれて入り、`name` ごと省くとその食材が記録から静かに抜ける。
+                  100g あたりの 2 項目は修正の入力欄がそのまま送信の項目を兼ねる。
+                  値を持たない食材でも欄は並ぶため空で送られ、長さの一致は崩れない。
+                  項目を省くと長さの一致が崩れて別の食材の値が隣にずれて入り、
+                  `name` ごと省くとその食材が記録から静かに抜ける。
                   空で送れば受付の `parseNumber` が null を返して送信全体が入力不正に
                   なる。値が揃わないうちは「記録する」を押せないため通常は送られない
                   が、その無効化が壊れたときに誤った記録が作られるのを受付が止める。
                 */}
                 <input type="hidden" name="name" value={row.entry.name} />
-                <input
-                  type="hidden"
-                  name="kcalPer100g"
-                  value={row.entry.per100g?.kcal ?? ""}
-                />
-                <input
-                  type="hidden"
-                  name="proteinPer100g"
-                  value={row.entry.per100g?.protein ?? ""}
-                />
                 <input type="hidden" name="grams" value={row.entry.grams} />
                 <span className="font-medium">
                   {row.entry.name} {row.entry.grams}g
                 </span>
                 {/*
+                  100g あたりの値は修正できる欄として出す（受入基準 3.1）。
+                  推定できなかった食材にも同じ欄が並ぶため、その食材だけ手で
+                  入力して記録に進める（受入基準 5.2）。
+
+                  欄は食材ごとに並ぶため、項目名を付けた状態で値の無い食材の
+                  欄も空文字として送られる。下書き行と違い、確定した食材の欄
+                  なので項目名を付けてよい。
+                */}
+                <div className="flex w-full gap-2">
+                  <label
+                    className="flex min-w-0 flex-1 flex-col gap-1 text-sm"
+                    htmlFor={`kcal-per-100g-${row.entry.id}`}
+                  >
+                    100g あたりのカロリー
+                    <input
+                      id={`kcal-per-100g-${row.entry.id}`}
+                      className={FIELD_CLASS}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      name="kcalPer100g"
+                      value={row.entry.per100g.kcal}
+                      onChange={(event) =>
+                        changePer100g(row.entry.id, "kcal", event.target.value)
+                      }
+                    />
+                  </label>
+                  <label
+                    className="flex min-w-0 flex-1 flex-col gap-1 text-sm"
+                    htmlFor={`protein-per-100g-${row.entry.id}`}
+                  >
+                    100g あたりのタンパク質
+                    <input
+                      id={`protein-per-100g-${row.entry.id}`}
+                      className={FIELD_CLASS}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      name="proteinPer100g"
+                      value={row.entry.per100g.protein}
+                      onChange={(event) =>
+                        changePer100g(
+                          row.entry.id,
+                          "protein",
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+                {/*
                   値が無い食材は栄養価を出せない。空欄にせず、無いことを言葉で
                   示す。推定できなかった食材には理由を添える（受入基準 5.1）。
+                  修正した値が読めないときは入力が不正であることを示す
+                  （受入基準 3.5）。
                 */}
                 <span className="text-sm">{describeRow(row)}</span>
                 <button
@@ -694,10 +821,11 @@ export function RecordForm() {
           </ul>
         )}
         {/*
-          推定の対象は 100g あたりの値を持たない食材だけである（受入基準 2.2）。
-          対象が 0 件のときは押せない。食材が 1 件も無いときも値を持たない食材が
-          0 件になるため、この 1 つの条件に含まれる。すでに値を持つ食材を対象に
-          しないことで、利用者が直した値が推定で上書きされない（受入基準 3.4）。
+          推定の対象は 100g あたりの値を持たず、利用者が値を決めていない食材
+          だけである（受入基準 2.2）。対象が 0 件のときは押せない。食材が 1 件も
+          無いときも対象が 0 件になるため、この 1 つの条件に含まれる。すでに値を
+          持つ食材と利用者が決めた食材を対象にしないことで、利用者が直した値が
+          推定で上書きされない（受入基準 3.4）。
 
           推定中も押せない。重ねて押すと同じ食材の推定が二重に走る
           （受入基準 4.2）。
@@ -706,7 +834,7 @@ export function RecordForm() {
           className={BUTTON_CLASS}
           type="button"
           onClick={requestEstimate}
-          disabled={estimating || !hasMissingValue}
+          disabled={estimating || estimateTargetEntries.length === 0}
         >
           {estimating ? "推定中…" : "推定する"}
         </button>
@@ -727,6 +855,8 @@ export function RecordForm() {
           100g あたりの値を持たない食材があるときも押せない（受入基準 4.5）。
           その食材の 2 項目は空で送られ、受付は送信全体を入力不正として弾く。
           押せる状態にしておくと、利用者には「入力が不正です」としか見えない。
+          修正した値が数値として読めない食材があるときも同じく押せない
+          （受入基準 3.5）。どの食材の値が読めないかは行の文面が示す。
 
           推定中も押せない（受入基準 4.3）。推定の結果が返ると食材の値が
           変わるため、待っているあいだの記録は利用者が見ていない値で作られる。

@@ -121,6 +121,42 @@ function listItemFor(label: string): HTMLElement {
   return found;
 }
 
+/**
+ * 一覧の 1 行の 100g あたりの欄を引く。
+ *
+ * 欄は食材ごとに並ぶため、画面全体から引くと同じ名前の欄が複数見つかる。
+ * 行に限定して引くことで、どの食材の欄かを取り違えない。
+ */
+function per100gField(
+  label: string,
+  field: "カロリー" | "タンパク質",
+): HTMLInputElement {
+  return within(listItemFor(label)).getByLabelText<HTMLInputElement>(
+    `100g あたりの${field}`,
+  );
+}
+
+/**
+ * 一覧の 1 行の 100g あたりの欄を書き換える。
+ *
+ * 行は書き換えるたびに引き直す。書き換えると再描画が起きるため、
+ * 先に引いた要素を使い回すと古い要素に書き込むことになりうる。
+ */
+function editPer100g(
+  label: string,
+  values: { kcal?: string; protein?: string },
+) {
+  const fields: readonly ["カロリー" | "タンパク質", string | undefined][] = [
+    ["カロリー", values.kcal],
+    ["タンパク質", values.protein],
+  ];
+  for (const [field, value] of fields) {
+    if (value !== undefined) {
+      fireEvent.change(per100gField(label, field), { target: { value } });
+    }
+  }
+}
+
 /** 「推定する」ボタン。推定中は文面が変わるため、文面の一部で引く。 */
 function estimateButton(): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", { name: /推定/ });
@@ -505,16 +541,18 @@ describe("RecordForm", () => {
 
     // 結果は求めた順に返る。食材名で突き合わせると 2 件目に 1 件目の値が入る。
     // 量が違うため、取り違えると換算後の値も 100g あたりの値も入れ替わる
-    const first = listItemFor("鶏もも 300g");
-    const second = listItemFor("鶏もも 100g");
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveValue(190);
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveValue(16.6);
+    expect(per100gField("鶏もも 100g", "カロリー")).toHaveValue(300);
+    expect(per100gField("鶏もも 100g", "タンパク質")).toHaveValue(20);
     expect(
-      within(first).getByText(
-        "100g あたり 190 kcal / タンパク質 16.6 g → 570 kcal / タンパク質 50 g",
+      within(listItemFor("鶏もも 300g")).getByText(
+        "この量で 570 kcal / タンパク質 50 g",
       ),
     ).toBeInTheDocument();
     expect(
-      within(second).getByText(
-        "100g あたり 300 kcal / タンパク質 20 g → 300 kcal / タンパク質 20 g",
+      within(listItemFor("鶏もも 100g")).getByText(
+        "この量で 300 kcal / タンパク質 20 g",
       ),
     ).toBeInTheDocument();
   });
@@ -788,15 +826,16 @@ describe("RecordForm", () => {
     addEntry({ name: "鶏もも", grams: "300" });
     await runEstimate([CHICKEN_ESTIMATE]);
 
-    const row = listItemFor("鶏もも 300g");
     // 100g あたりの値を示す（受入基準 2.7）。推定の品質が落ちたことに気づく
     // 手段は利用者が値を見ることだけである。送信の項目にしか無い状態では、
     // 1 桁ずれた値でも換算後の数字からは見分けられない
-    expect(within(row).getByText(/100g あたり 190 kcal/)).toBeInTheDocument();
-    expect(within(row).getByText(/タンパク質 16\.6 g/)).toBeInTheDocument();
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveValue(190);
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveValue(16.6);
     // 食材ごとの換算後の値も同じ行に示す
     expect(
-      within(row).getByText(/570 kcal \/ タンパク質 50 g/),
+      within(listItemFor("鶏もも 300g")).getByText(
+        /570 kcal \/ タンパク質 50 g/,
+      ),
     ).toBeInTheDocument();
     // 合計は一覧の外に出す。食材が 1 件のときは同じ数字になるため、行の中と
     // 区別して引く
@@ -832,14 +871,18 @@ describe("RecordForm", () => {
     );
 
     // 1 件の失敗で推定できた食材の値を失わない（受入基準 5.5）
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveValue(190);
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveValue(16.6);
     expect(
       within(listItemFor("鶏もも 300g")).getByText(
-        "100g あたり 190 kcal / タンパク質 16.6 g → 570 kcal / タンパク質 50 g",
+        "この量で 570 kcal / タンパク質 50 g",
       ),
     ).toBeInTheDocument();
+    expect(per100gField("白米 200g", "カロリー")).toHaveValue(342);
+    expect(per100gField("白米 200g", "タンパク質")).toHaveValue(6.1);
     expect(
       within(listItemFor("白米 200g")).getByText(
-        "100g あたり 342 kcal / タンパク質 6.1 g → 684 kcal / タンパク質 12 g",
+        "この量で 684 kcal / タンパク質 12 g",
       ),
     ).toBeInTheDocument();
     // 合計は値を持つ食材だけの和である。推定できなかった食材を 0 として数えない
@@ -883,5 +926,207 @@ describe("RecordForm", () => {
     // 示す結果は常に最後に押したボタンのものである
     expect(screen.getByRole("status")).toHaveTextContent("推定しました");
     expect(screen.getByRole("status")).not.toHaveTextContent("記録しました");
+  });
+
+  it("100g あたりの値を直すと、その食材の値と合計を算出し直す", async () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    // 推定した値は修正できる形で示す（受入基準 3.1）。読み取り専用で出すと、
+    // 実感と違う値をそのまま記録するしかなくなる
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveValue(190);
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveValue(16.6);
+
+    editPer100g("鶏もも 300g", { kcal: "100", protein: "20" });
+
+    // その食材の値（受入基準 3.2）
+    expect(
+      within(listItemFor("鶏もも 300g")).getByText(
+        "この量で 300 kcal / タンパク質 60 g",
+      ),
+    ).toBeInTheDocument();
+    // 合計（受入基準 3.3）。行の文面とは完全一致で区別する
+    expect(screen.getByText("300 kcal / タンパク質 60 g")).toBeInTheDocument();
+  });
+
+  it("値を手で直したあとに食材を足して推定しても、直した値が変わらない", async () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+    editPer100g("鶏もも 300g", { kcal: "150" });
+
+    addEntry({ name: "白米", grams: "200" });
+    await runEstimate([
+      { name: "白米", ok: true, kcalPer100g: 342, proteinPer100g: 6.1 },
+    ]);
+
+    // 利用者が決めた値を推定で上書きしない（受入基準 3.4）。この機能で
+    // いちばん重要な振る舞いである
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveValue(150);
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveValue(16.6);
+    // 上書きを条件分岐で防ぐのではなく、推定の対象に入れないことで防ぐ。
+    // 対象に入れてしまうと、通信も無駄になり上書きの道も開く
+    expect(estimateFormData(1).getAll("name")).toEqual(["白米"]);
+    // 合計も直した値で出る（鶏もも 450 kcal / P50、白米 684 kcal / P12）
+    expect(screen.getByText("1134 kcal / タンパク質 62 g")).toBeInTheDocument();
+  });
+
+  it("推定の結果が返る前に値を直すと、返った値で上書きしない", async () => {
+    let finish: (state: EstimateState) => void = () => {};
+    vi.mocked(estimateFoods).mockImplementation(
+      () =>
+        new Promise<EstimateState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    addEntry({ name: "白米", grams: "200" });
+    fireEvent.click(estimateButton());
+    await waitFor(() => expect(estimateButton()).toHaveTextContent("推定中"));
+
+    // 推定を待つあいだに利用者が値を入れる。求めたときは対象だったため、
+    // 結果を反映する側で利用者が決めた食材を飛ばさないと上書きされる
+    editPer100g("鶏もも 300g", { kcal: "150" });
+    finish({
+      status: "success",
+      estimates: [
+        CHICKEN_ESTIMATE,
+        { name: "白米", ok: true, kcalPer100g: 342, proteinPer100g: 6.1 },
+      ],
+    });
+
+    // 反映が済んだことを、利用者が触っていない食材の値で待つ。ボタンの文面が
+    // 戻る描画は反映の効果より前なので、文面で待つと反映前の DOM を読み、
+    // 上書きされていても気づけない。
+    await waitFor(() =>
+      expect(per100gField("白米 200g", "カロリー")).toHaveValue(342),
+    );
+
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveValue(150);
+    // 片方しか入れていない欄も埋めない。利用者が決めた食材には触らない
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveValue(null);
+  });
+
+  it("値を手で直した食材は推定の対象に入らない", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    // 欄を空にする。値は無いが、利用者が自ら決めた欄である
+    editPer100g("鶏もも 300g", { kcal: "" });
+
+    // 値が無いので記録はできない（受入基準 4.5）
+    expect(submitButton(container)).toBeDisabled();
+    // それでも推定で埋め直さない（受入基準 3.4）。埋め直すと、利用者が
+    // 消した値が推定の値に戻る
+    expect(estimateButton()).toBeDisabled();
+  });
+
+  it("直した 100g あたりの値が不正なら記録を受け付けず、入力が不正であることを示す", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+    await runEstimate([CHICKEN_ESTIMATE]);
+
+    // 0 未満の値（受入基準 3.5）。負のカロリーが vault に書かれる
+    editPer100g("鶏もも 300g", { kcal: "-50" });
+    expect(submitButton(container)).toBeDisabled();
+    expect(
+      within(listItemFor("鶏もも 300g")).getByText(
+        "100g あたりの値は 0 以上の数値で入力してください。",
+      ),
+    ).toBeInTheDocument();
+
+    // 数値として読めない値。`type="number"` の欄は読めない入力を空文字として
+    // 返すため、利用者が実際に踏むのはこの経路である
+    editPer100g("鶏もも 300g", { kcal: "" });
+    expect(submitButton(container)).toBeDisabled();
+    expect(
+      within(listItemFor("鶏もも 300g")).getByText(
+        "100g あたりの値は 0 以上の数値で入力してください。",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("100g あたりの 0 は受け付ける。条件は 0 以上であり、0 より大きいではない", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "お茶", grams: "300" });
+    await runEstimate([
+      { name: "お茶", ok: true, kcalPer100g: 0, proteinPer100g: 0 },
+    ]);
+
+    // 0 kcal の食品（水、お茶）は正当な入力である
+    expect(submitButton(container)).toBeEnabled();
+    editPer100g("お茶 300g", { kcal: "0", protein: "0" });
+    expect(submitButton(container)).toBeEnabled();
+    expect(
+      within(listItemFor("お茶 300g")).getByText(
+        "この量で 0 kcal / タンパク質 0 g",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("100g あたりの数値欄は 0 未満を入力できない状態にする", () => {
+    render(<RecordForm />);
+
+    addEntry({ name: "鶏もも", grams: "300" });
+
+    // ブラウザ側の 1 層目。回避された送信は受付が弾く
+    expect(per100gField("鶏もも 300g", "カロリー")).toHaveAttribute("min", "0");
+    expect(per100gField("鶏もも 300g", "タンパク質")).toHaveAttribute(
+      "min",
+      "0",
+    );
+  });
+
+  it("推定できなかった食材に手で値を入力し、その値で記録できる", async () => {
+    const { container } = render(<RecordForm />);
+
+    addEntry({ name: "肉", grams: "100" });
+    vi.mocked(estimateFoods).mockResolvedValue({
+      status: "success",
+      estimates: [{ name: "肉", ok: false, note: "部位や種類が特定できない" }],
+    });
+    fireEvent.click(estimateButton());
+
+    // 推定できなかった食材にも手で入力する手段を示す（受入基準 5.2）。
+    // 理由の文面は残す。どの食材がなぜ推定できなかったかは引き続き分かる
+    await waitFor(() =>
+      expect(
+        within(listItemFor("肉 100g")).getByText(
+          "推定できませんでした。部位や種類が特定できない",
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(per100gField("肉 100g", "カロリー")).toHaveValue(null);
+
+    editPer100g("肉 100g", { kcal: "200", protein: "20" });
+    expect(
+      within(listItemFor("肉 100g")).getByText(
+        "この量で 200 kcal / タンパク質 20 g",
+      ),
+    ).toBeInTheDocument();
+
+    // 手で入力した値で記録できる（受入基準 5.3, 3.6）
+    vi.mocked(recordMeal).mockResolvedValue({
+      status: "success",
+      fileName: "2026-10-11-1630.md",
+    });
+    expect(submitButton(container)).toBeEnabled();
+    fireEvent.click(submitButton(container));
+
+    await waitFor(() => expect(recordMeal).toHaveBeenCalledTimes(1));
+    const formData = submittedFormData();
+    expect(formData.getAll("name")).toEqual(["肉"]);
+    expect(formData.getAll("kcalPer100g")).toEqual(["200"]);
+    expect(formData.getAll("proteinPer100g")).toEqual(["20"]);
+    expect(formData.getAll("grams")).toEqual(["100"]);
   });
 });
